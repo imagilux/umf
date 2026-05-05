@@ -131,6 +131,8 @@ uv run mike list                                     # show published versions
 uv run mike delete 0.1                               # remove a published version
 ```
 
-**Prerequisite**: mike commits to a branch and pushes, so the repo must be a git repo with a remote configured. The current working tree is not yet a git repo — `git init`, an initial commit, and `git remote add origin <url>` are required before the deploy commands work.
+**Live site**: https://umf.imagilux.org/ (GitHub Pages, custom domain, HTTPS-enforced; serves the `gh-pages` branch of `imagilux/umf`).
+
+**CI-driven publish**: `.github/workflows/deploy-docs.yml` runs `mike deploy` automatically on every push to `main` (excluding `.claude/`, `.github/`, `.gitignore`, `README.md`). Defaults to publishing `0.1 latest`; bump the workflow's `inputs.version.default` when cutting v0.2. Manual override available via the *Run workflow* button on the Actions tab. Prefer CI over local `mike deploy` to keep `gh-pages` linear.
 
 **Convention**: tag major spec revisions with the spec version (`0.1`, `0.2`, `1.0`) plus the `latest` alias on whichever is current. Pre-release work-in-progress goes under `dev`. Once a version is published, treat it as immutable; corrections go into the next version, not amendments to a published one.

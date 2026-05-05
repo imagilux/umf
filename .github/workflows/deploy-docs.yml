@@ -1,0 +1,69 @@
+name: Deploy docs
+
+# Re-publishes the MkDocs site via mike whenever main moves, and exposes a
+# manual trigger so a specific version/alias can be cut on demand. Once this
+# workflow is active, prefer it over local `mike deploy` to keep gh-pages
+# linear and avoid divergence between dev machines and CI.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.claude/**'
+      - '.gitignore'
+      - 'README.md'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (matches the spec version, e.g. 0.1, 0.2)"
+        default: "0.1"
+        required: true
+      alias:
+        description: "Alias to attach (e.g. latest, dev) — leave empty for none"
+        default: "latest"
+        required: false
+
+permissions:
+  # mike pushes the rendered site to the gh-pages branch
+  contents: write
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # mike reads/writes the gh-pages branch history; full clone required
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Configure git author for gh-pages commits
+        # github-actions[bot] is the canonical identity for workflow-driven
+        # commits; the noreply email matches the bot user id.
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy with mike
+        env:
+          VERSION: ${{ github.event.inputs.version || '0.1' }}
+          ALIAS:   ${{ github.event.inputs.alias   || 'latest' }}
+        run: |
+          if [ -n "$ALIAS" ]; then
+            uv run mike deploy --push --update-aliases "$VERSION" "$ALIAS"
+          else
+            uv run mike deploy --push "$VERSION"
+          fi
