@@ -1,0 +1,6 @@
+{# Override of mkdocs-material's partials/logo.html — emits both Imagilux
+   wordmarks. The framework auto-hides the inactive variant per scheme via
+   its built-in `img[src$="#only-light"]` / `img[src$="#only-dark"]` rules
+   in main.css and palette.css. No extra CSS needed. #}
+<img src="{{ 'assets/logo-light.svg' | url }}#only-light" alt="logo">
+<img src="{{ 'assets/logo-dark.svg' | url }}#only-dark" alt="logo">

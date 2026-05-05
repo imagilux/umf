@@ -1,0 +1,42 @@
+# MkDocs / mike build output
+/site/
+.cache/
+
+# Python virtualenv (uv-managed; rebuildable from uv.lock)
+/.venv/
+/venv/
+.python-version
+
+# Python bytecode and packaging artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+/build/
+/dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS cruft
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example

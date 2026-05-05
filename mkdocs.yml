@@ -1,0 +1,68 @@
+site_name: UMF — Universal Machine Format
+site_description: A Dockerfile-inspired DSL for building universal bootable artifacts (VM, bootc, unikernel, container)
+site_author: Gaël THEROND / Imagilux
+
+docs_dir: docs
+
+nav:
+  - Overview: index.md
+  - Compatibility: compatibility.md
+  - Specification: specification.md
+  - Examples: examples.md
+
+theme:
+  name: material
+  custom_dir: overrides
+  font:
+    text: Inter Tight
+    code: JetBrains Mono
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.expand
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+    - toc.integrate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: amber
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: amber
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra:
+  version:
+    provider: mike
+    default: latest
+
+extra_css:
+  - stylesheets/imagilux.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true

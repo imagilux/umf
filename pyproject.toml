@@ -1,0 +1,14 @@
+[project]
+name = "umf"
+version = "0.1.0"
+description = "Universal Machine Format — a Dockerfile-inspired DSL for building universal bootable artifacts"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Gaël THEROND" }]
+dependencies = [
+    "mike>=2.2.0",
+    "mkdocs-material>=9.5,<10",
+]
+
+[tool.uv]
+package = false
