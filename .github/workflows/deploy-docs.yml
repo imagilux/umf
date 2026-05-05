@@ -43,7 +43,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8
+        # Pinned to immutable tag — astral-sh stopped publishing floating
+        # major/minor tags from v8.0.0 onward (security: tj-actions-style
+        # supply-chain attacks). Bump deliberately when a new release lands.
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
 
