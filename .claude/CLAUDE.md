@@ -133,6 +133,14 @@ uv run mike delete 0.1                               # remove a published versio
 
 **Live site**: https://umf.imagilux.org/ (GitHub Pages, custom domain, HTTPS-enforced; serves the `gh-pages` branch of `imagilux/umf`).
 
-**CI-driven publish**: `.github/workflows/deploy-docs.yml` runs `mike deploy` automatically on every push to `main` (excluding `.claude/`, `.github/`, `.gitignore`, `README.md`). Defaults to publishing `0.1 latest`; bump the workflow's `inputs.version.default` when cutting v0.2. Manual override available via the *Run workflow* button on the Actions tab. Prefer CI over local `mike deploy` to keep `gh-pages` linear.
+**CI-driven publish (tag-triggered)**: `.github/workflows/deploy-docs.yml` deploys on git-tag push matching `vX.Y` or `vX.Y.Z`. The tag name (minus the leading `v`) becomes the mike version slot and `latest` is repointed to it. `main` is a continuous development branch — pushes to main do *not* publish; cut a tag to release. Manual override (re-publish, backport, off-schedule) is available via the *Run workflow* button with explicit version/alias inputs. Prefer CI over local `mike deploy` to keep `gh-pages` linear.
+
+**Cutting a release**:
+
+```bash
+# from main, after the spec content is ready
+git tag v0.2 && git push origin v0.2     # publishes 0.2 + repoints latest
+git tag v0.2.1 && git push origin v0.2.1 # patch release
+```
 
 **Convention**: tag major spec revisions with the spec version (`0.1`, `0.2`, `1.0`) plus the `latest` alias on whichever is current. Pre-release work-in-progress goes under `dev`. Once a version is published, treat it as immutable; corrections go into the next version, not amendments to a published one.

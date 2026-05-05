@@ -1,23 +1,24 @@
 name: Deploy docs
 
-# Re-publishes the MkDocs site via mike whenever main moves, and exposes a
-# manual trigger so a specific version/alias can be cut on demand. Once this
-# workflow is active, prefer it over local `mike deploy` to keep gh-pages
-# linear and avoid divergence between dev machines and CI.
+# Releases the MkDocs site via mike on tag pushes. The tag name (with the
+# leading 'v' stripped) becomes the published mike version slot, and the
+# 'latest' alias is repointed to it.
+#
+# main is a continuous-development branch — pushes to main do NOT publish.
+# Cut a tag (vX.Y or vX.Y.Z) to release.
+#
+# Manual escape hatch: workflow_dispatch lets you re-publish an existing
+# version, backport a patch under its own alias, or publish off-schedule.
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - '.claude/**'
-      - '.gitignore'
-      - 'README.md'
-      - '.github/**'
+    tags:
+      - 'v[0-9]+.[0-9]+'         # vX.Y      — minor releases
+      - 'v[0-9]+.[0-9]+.[0-9]+'  # vX.Y.Z    — patch releases
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (matches the spec version, e.g. 0.1, 0.2)"
-        default: "0.1"
+        description: "Version to publish (e.g. 0.1, 0.2.1)"
         required: true
       alias:
         description: "Alias to attach (e.g. latest, dev) — leave empty for none"
@@ -60,10 +61,27 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Resolve version + alias
+        id: meta
+        # Tag pushes derive version from the ref (strip refs/tags/ and
+        # leading 'v'); workflow_dispatch passes them in directly.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            ALIAS="${{ github.event.inputs.alias }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            ALIAS="latest"
+          fi
+          echo "Resolved: version=$VERSION alias=${ALIAS:-<none>}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "alias=$ALIAS"     >> "$GITHUB_OUTPUT"
+
       - name: Deploy with mike
         env:
-          VERSION: ${{ github.event.inputs.version || '0.1' }}
-          ALIAS:   ${{ github.event.inputs.alias   || 'latest' }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          ALIAS:   ${{ steps.meta.outputs.alias }}
         run: |
           if [ -n "$ALIAS" ]; then
             uv run mike deploy --push --update-aliases "$VERSION" "$ALIAS"
