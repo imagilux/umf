@@ -1,0 +1,251 @@
+/* ============================================================
+   IMAGILUX • mkdocs-material theme overlay
+   ------------------------------------------------------------
+   Bridges the Imagilux Design System tokens (sourced from
+   /home/flint/imagilux/ids.html, "colors_and_type.css") onto
+   mkdocs-material's --md-* variable surface.
+
+   Token namespace: --imx-*  (do not rename — mirrors IDS canon)
+   ============================================================ */
+
+/* ============================================================
+   1. IDS TOKENS — single source of truth
+   ============================================================ */
+:root {
+  /* Brand colors */
+  --imx-white-smoke:   #F5F3F5;
+  --imx-ink-black:     #11151C;
+  --imx-bright-amber:  #FED234;
+  --imx-bright-marine: #016FB9;
+  --imx-scarlett-fire: #FF220C;
+
+  /* Neutral scale */
+  --imx-neutral-0:    #FFFFFF;
+  --imx-neutral-50:   #F5F3F5;
+  --imx-neutral-100:  #ECEAEC;
+  --imx-neutral-200:  #DAD7DB;
+  --imx-neutral-300:  #B8B4BA;
+  --imx-neutral-400:  #8A8690;
+  --imx-neutral-500:  #5E5B66;
+  --imx-neutral-600:  #3D3D48;
+  --imx-neutral-700:  #232730;
+  --imx-neutral-800:  #181C25;
+  --imx-neutral-900:  #11151C;
+  --imx-neutral-950:  #080A10;
+
+  /* Typography */
+  --imx-font-display: "Inter Tight", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --imx-font-body:    "Inter Tight", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --imx-font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --imx-tracking-tight:   -0.02em;
+  --imx-tracking-eyebrow:  0.18em;
+
+  /* Radii */
+  --imx-radius-sm:  4px;
+  --imx-radius-md:  6px;
+  --imx-radius-lg:  8px;
+  --imx-radius-xl: 12px;
+
+  /* Elevation */
+  --imx-elev-1: 0 1px 2px rgba(17, 21, 28, 0.06), 0 1px 1px rgba(17, 21, 28, 0.04);
+  --imx-elev-2: 0 2px 6px rgba(17, 21, 28, 0.08), 0 1px 2px rgba(17, 21, 28, 0.05);
+  --imx-elev-3: 0 8px 24px rgba(17, 21, 28, 0.10), 0 2px 6px rgba(17, 21, 28, 0.06);
+
+  /* Motion */
+  --imx-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --imx-dur-fast: 120ms;
+  --imx-dur-base: 200ms;
+}
+
+/* ============================================================
+   2. LIGHT SCHEME — IDS tokens onto Material variables
+   ============================================================ */
+[data-md-color-scheme="default"] {
+  /* Surfaces */
+  --md-default-bg-color:           var(--imx-white-smoke);
+  --md-default-bg-color--light:    var(--imx-neutral-100);
+  --md-default-bg-color--lighter:  var(--imx-neutral-200);
+  --md-default-bg-color--lightest: var(--imx-neutral-300);
+
+  /* Text */
+  --md-default-fg-color:           var(--imx-ink-black);
+  --md-default-fg-color--light:    var(--imx-neutral-600);
+  --md-default-fg-color--lighter:  var(--imx-neutral-400);
+  --md-default-fg-color--lightest: var(--imx-neutral-300);
+
+  /* Primary — header / chrome (white-smoke; flush with page bg, delineated by elev-1) */
+  --md-primary-fg-color:        var(--imx-white-smoke);
+  --md-primary-fg-color--light: var(--imx-neutral-0);
+  --md-primary-fg-color--dark:  var(--imx-neutral-100);
+  --md-primary-bg-color:        var(--imx-ink-black);
+  --md-primary-bg-color--light: var(--imx-neutral-700);
+
+  /* Accent — links, focus (marine) */
+  --md-accent-fg-color:              var(--imx-bright-marine);
+  --md-accent-fg-color--transparent: rgba(1, 111, 185, 0.1);
+  --md-accent-bg-color:              var(--imx-white-smoke);
+  --md-accent-bg-color--light:       var(--imx-neutral-100);
+
+  /* Typeset (article body) */
+  --md-typeset-color:    var(--md-default-fg-color);
+  --md-typeset-a-color:  var(--imx-bright-marine);
+
+  /* Code */
+  --md-code-bg-color: var(--imx-neutral-100);
+  --md-code-fg-color: var(--imx-ink-black);
+  --md-code-hl-color: rgba(254, 210, 52, 0.4);
+
+  /* Admonition / details edge */
+  --md-typeset-table-color: var(--imx-neutral-200);
+}
+
+/* Material's palette.css forces --md-typeset-a-color to its own amber tint
+   (#d19d00) for `[data-md-color-primary=amber]:not(slate)` at specificity
+   (0,2,0), beating the scheme-only rule above (0,1,0). Re-assert marine at
+   matching specificity; cascade order (extra_css after palette.css) breaks
+   the tie in our favor. Affects body links and submenu / TOC anchors. */
+[data-md-color-primary="amber"]:not([data-md-color-scheme="slate"]) {
+  --md-typeset-a-color: var(--imx-bright-marine);
+}
+
+/* ============================================================
+   3. DARK SCHEME (slate) — same IDS, dark surfaces
+   ============================================================ */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color:           var(--imx-ink-black);
+  --md-default-bg-color--light:    var(--imx-neutral-800);
+  --md-default-bg-color--lighter:  var(--imx-neutral-700);
+  --md-default-bg-color--lightest: var(--imx-neutral-600);
+
+  --md-default-fg-color:           var(--imx-white-smoke);
+  --md-default-fg-color--light:    var(--imx-neutral-300);
+  --md-default-fg-color--lighter:  var(--imx-neutral-400);
+  --md-default-fg-color--lightest: var(--imx-neutral-500);
+
+  /* Primary — header / chrome (ink-black; flush with page bg, delineated by elev-1) */
+  --md-primary-fg-color:        var(--imx-ink-black);
+  --md-primary-fg-color--light: var(--imx-neutral-800);
+  --md-primary-fg-color--dark:  var(--imx-neutral-950);
+  --md-primary-bg-color:        var(--imx-white-smoke);
+  --md-primary-bg-color--light: var(--imx-neutral-300);
+
+  /* On dark surfaces, links pivot to amber per IDS .surface-dark rule */
+  --md-accent-fg-color:              var(--imx-bright-amber);
+  --md-accent-fg-color--transparent: rgba(254, 210, 52, 0.15);
+
+  --md-typeset-color:    var(--md-default-fg-color);
+  --md-typeset-a-color:  var(--imx-bright-amber);
+
+  --md-code-bg-color: var(--imx-neutral-800);
+  --md-code-fg-color: var(--imx-white-smoke);
+  --md-code-hl-color: rgba(254, 210, 52, 0.25);
+
+  --md-typeset-table-color: var(--imx-neutral-700);
+}
+
+/* ============================================================
+   4. TYPOGRAPHY POLISH
+   ============================================================ */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 {
+  font-family: var(--imx-font-display);
+  font-weight: 700;
+  letter-spacing: var(--imx-tracking-tight);
+  text-wrap: balance;
+}
+
+.md-typeset h1 { font-weight: 800; letter-spacing: -0.025em; }
+.md-typeset h2 { font-weight: 700; }
+.md-typeset h3 { font-weight: 600; letter-spacing: -0.015em; }
+.md-typeset h4 { font-weight: 600; letter-spacing: -0.01em; }
+
+.md-typeset a {
+  transition: color var(--imx-dur-fast) var(--imx-ease-standard);
+}
+.md-typeset a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.md-typeset code,
+.md-typeset pre,
+.md-typeset kbd,
+.md-typeset samp {
+  font-family: var(--imx-font-mono);
+}
+
+.md-typeset code {
+  border-radius: var(--imx-radius-sm);
+}
+
+.md-typeset pre > code {
+  border-radius: var(--imx-radius-lg);
+}
+
+::selection {
+  background: var(--imx-bright-amber);
+  color: var(--imx-ink-black);
+}
+
+/* ============================================================
+   5. CHROME — header, tabs, sidebar
+   ============================================================ */
+.md-header {
+  box-shadow: var(--imx-elev-1);
+}
+
+.md-tabs {
+  border-bottom: 1px solid rgba(17, 21, 28, 0.1);
+}
+[data-md-color-scheme="slate"] .md-tabs {
+  border-bottom-color: var(--imx-neutral-700);
+}
+
+/* Active sidebar nav item — mark with amber */
+.md-nav__link--active,
+.md-nav__item--active > .md-nav__link {
+  color: var(--imx-bright-marine);
+  font-weight: 600;
+}
+[data-md-color-scheme="slate"] .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav__item--active > .md-nav__link {
+  color: var(--imx-bright-amber);
+}
+
+/* Tables — IDS uses thin borders, restrained */
+.md-typeset table:not([class]) {
+  border-radius: var(--imx-radius-md);
+  box-shadow: var(--imx-elev-1);
+}
+.md-typeset table:not([class]) th {
+  font-family: var(--imx-font-display);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  background: var(--md-default-bg-color--light);
+}
+
+/* Admonitions — soften corners to IDS scale */
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: var(--imx-radius-lg);
+}
+
+/* ============================================================
+   6. LOGO — per-scheme swap
+   ------------------------------------------------------------
+   Material's built-in `img[src$="#only-light|dark"]` rules drive
+   the swap (the partial in overrides/partials/logo.html appends
+   those fragments). The `slate` rule lives in palette.css and
+   wins its cascade tie cleanly. The `default` rule is in main.css
+   and loses its tie to a later `.md-header__button.md-logo img
+   { display:block }` rule in the same file (both 0,2,1 specificity).
+   Restating it here in extra_css restores cascade order.
+   ============================================================ */
+[data-md-color-scheme="default"] img[src$="#only-dark"] {
+  display: none;
+}
