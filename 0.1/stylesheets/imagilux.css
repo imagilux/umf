@@ -187,7 +187,12 @@
   border-radius: var(--imx-radius-lg);
 }
 
-::selection {
+/* Selection highlight follows the scheme's accent: marine in light, amber in dark. */
+[data-md-color-scheme="default"] ::selection {
+  background: var(--imx-bright-marine);
+  color: var(--imx-white-smoke);
+}
+[data-md-color-scheme="slate"] ::selection {
   background: var(--imx-bright-amber);
   color: var(--imx-ink-black);
 }
