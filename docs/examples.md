@@ -12,28 +12,27 @@ The workflows below follow that progression: build the components, then assemble
 
 A kernel is a UMF build whose payload is the compiled kernel + modules. Downstream builds consume it via `KERNEL <name>:<release>`; the resolver pulls it from the registry, falling back to local cache, then to upstream source.
 
-```dockerfile
-# kernel-6.12.21.umf
-FROM scratch
-FIRMWARE uefi
-BOOTLOADER none
-ROOTFS alpine:3.21
-KERNEL linux:6.12.21
-INITRD none
+A kernel build needs nothing from the rest of the boot chain — FIRMWARE, BOOTLOADER, ROOTFS, and INITRD describe how to *consume* a kernel inside a bootable image, not how to produce one. The kernel artifact itself is just sources + config compiled into a kernel image and its modules. Three lines are sufficient:
 
-LABEL org.imagilux.umf.type=kernel
-LABEL org.imagilux.umf.kernel.version=6.12.21
-LABEL org.imagilux.umf.kernel.config=default
+```dockerfile
+# kernel-v7.0.umf
+FROM scratch
+KERNEL linux:v7.0
+ADD ./config/default
 ```
+
+`FROM scratch` unlocks the KERNEL directive. `KERNEL linux:v7.0` selects the upstream source release. `ADD ./config/default` supplies the kernel `.config` that drives the compile.
+
+LABELs are optional but conventional when publishing — `org.imagilux.umf.type=kernel`, `org.imagilux.umf.kernel.version=v7.0`, `org.imagilux.umf.kernel.config=default` make the artifact self-describing in a registry.
 
 Build and publish:
 
 ```bash
-umf build -t registry.example.com/kernels/linux:6.12.21 .
-umf push registry.example.com/kernels/linux:6.12.21
+umf build -t registry.example.com/kernels/linux:v7.0 .
+umf push registry.example.com/kernels/linux:v7.0
 ```
 
-Downstream builds that reference `KERNEL linux:6.12.21` now resolve to this artifact instead of triggering an upstream source build.
+Downstream builds that reference `KERNEL linux:v7.0` now resolve to this artifact instead of triggering an upstream source build.
 
 ### Building a curated rootfs
 
@@ -101,7 +100,7 @@ FROM scratch
 FIRMWARE uefi
 BOOTLOADER systemd-boot
 ROOTFS myorg-base:1.0
-KERNEL linux:6.12.21
+KERNEL linux:v7.0
 INITRD auto
 
 LABEL org.imagilux.umf.author="<author>"
@@ -146,7 +145,7 @@ The same component artifacts compose into different targets by varying the boot 
 FROM scratch
 FIRMWARE uefi
 BOOTLOADER none
-KERNEL linux:6.12.21
+KERNEL linux:v7.0
 INITRD none
 ROOTFS none
 ENTRYPOINT binary
