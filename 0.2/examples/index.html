@@ -1,0 +1,748 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Dockerfile-inspired DSL for building universal bootable artifacts (VM, bootc, unikernel, container)">
+      
+      
+        <meta name="author" content="Gaël THEROND / Imagilux">
+      
+      
+      
+        <link rel="prev" href="../specification/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Examples - UMF — Universal Machine Format</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter+Tight:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter Tight";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/imagilux.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#examples" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="UMF — Universal Machine Format" class="md-header__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            UMF — Universal Machine Format
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Examples
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="UMF — Universal Machine Format" class="md-nav__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    UMF — Universal Machine Format
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../specification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#component-artifacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component artifacts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Component artifacts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#building-a-base-kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building a base kernel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building-a-kernel-build-env" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building a kernel-build-env
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building-a-curated-rootfs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building a curated rootfs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building-a-bootloader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building a bootloader
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composing-artifacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composing artifacts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Composing artifacts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#full-vm-image-from-custom-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full VM image from custom components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#distro-base-vm-simplified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distro-base VM (simplified)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#target-variations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target variations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Target variations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unikernel-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unikernel payload
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container-degenerate-case" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container (degenerate case)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h1>
+<p>End-to-end workflows showing how UMF builds compose. Each component (kernel, rootfs, bootloader) is itself an OCI artifact produced by a UMF build, so the same DSL and the same <code>registry → cache → source build</code> resolution chain apply at every level.</p>
+<p>The workflows below follow that progression: build the components, then assemble them into final artifacts for each target.</p>
+<hr />
+<h2 id="component-artifacts">Component artifacts<a class="headerlink" href="#component-artifacts" title="Permanent link">&para;</a></h2>
+<h3 id="building-a-base-kernel">Building a base kernel<a class="headerlink" href="#building-a-base-kernel" title="Permanent link">&para;</a></h3>
+<p>A kernel is a UMF build whose payload is the compiled kernel + modules. Downstream builds consume it via <code>KERNEL &lt;name&gt;:&lt;release&gt;</code>; the resolver pulls it from the registry, falling back to local cache, then to upstream source.</p>
+<p>The kernel build is a <em>producer</em>: it fetches sources, applies a config, compiles, and emits the artifact. It runs on top of a container-shaped build env that supplies the toolchain (gcc, make, and the kernel's required libs). Three lines are sufficient:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c"># kernel-v7.0.umf</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">FROM</span><span class="w"> </span><span class="s">imagilux/kernel-build-env:v1</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>KERNEL<span class="w"> </span>linux:v7.0
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">ADD</span><span class="w"> </span>./config/default<span class="w"> </span>/.config
+</code></pre></div>
+<p><code>FROM imagilux/kernel-build-env:v1</code> is the container-shaped UMF artifact carrying the toolchain — a normal OCI image, resolved through the same <code>registry → cache → source</code> chain as everything else. <code>KERNEL linux:v7.0</code> selects the upstream source release; the <code>v</code> prefix maps 1:1 to <code>torvalds/linux</code> git tags. <code>ADD ./config/default /.config</code> drops the kernel <code>.config</code> at the build's source-tree root for the build to pick up.</p>
+<p>Because the L0 here is container-shaped, KERNEL operates in <em>producer mode</em> (compile and emit). In a downstream VM build, <code>FROM scratch</code> + a boot chain puts the same directive in <em>consumer mode</em> (resolve and install). See <a href="../specification/#l0-introspection">L0 Introspection</a> for the rule.</p>
+<p>LABELs are optional but conventional when publishing — <code>org.imagilux.umf.type=kernel</code>, <code>org.imagilux.umf.kernel.version=v7.0</code>, <code>org.imagilux.umf.kernel.config=default</code> make the artifact self-describing in a registry.</p>
+<p>Build and publish:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>umf<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>registry.example.com/kernels/linux:v7.0<span class="w"> </span>.
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>umf<span class="w"> </span>push<span class="w"> </span>registry.example.com/kernels/linux:v7.0
+</code></pre></div>
+<p>Downstream builds that reference <code>KERNEL linux:v7.0</code> now resolve to this artifact instead of triggering an upstream source build.</p>
+<h3 id="building-a-kernel-build-env">Building a kernel-build-env<a class="headerlink" href="#building-a-kernel-build-env" title="Permanent link">&para;</a></h3>
+<p>The build env that the kernel build <code>FROM</code>'s is itself a UMF artifact — no hidden builder magic, no implicit toolchain injection. It's a container target (rootfs + tools, no boot chain), built and published like any other component:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c"># kernel-build-env-v1.umf</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">FROM</span><span class="w"> </span><span class="s">debian:bookworm</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">RUN</span><span class="w"> </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>--no-install-recommends<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span>bc<span class="w"> </span>bison<span class="w"> </span>cpio<span class="w"> </span>flex<span class="w"> </span>gcc<span class="w"> </span>kmod<span class="w"> </span>libelf-dev<span class="w"> </span>libssl-dev<span class="w"> </span>make<span class="w"> </span>perl<span class="w"> </span>rsync<span class="w"> </span>zstd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>apt-get<span class="w"> </span>clean<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/var/lib/apt/lists/*
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.type<span class="o">=</span>kernel-build-env
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.kernel-build-env.version<span class="o">=</span>v1
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.kernel-build-env.toolchain<span class="o">=</span>gcc
+</code></pre></div>
+<p>Publish:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>umf<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>registry.example.com/kernel-build-env:v1<span class="w"> </span>.
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>umf<span class="w"> </span>push<span class="w"> </span>registry.example.com/kernel-build-env:v1
+</code></pre></div>
+<p>Variants are just different artifacts: swap <code>gcc</code> for <code>clang lld llvm</code>, retag as <code>:v1-llvm</code>, set <code>kernel-build-env.toolchain=llvm</code>, and a downstream kernel build <code>FROM</code>'s <code>myorg/kernel-build-env:v1-llvm</code> to compile a clang-built kernel. Custom patches, Rust-in-kernel, vendor toolchains — same shape, no new directives required.</p>
+<h3 id="building-a-curated-rootfs">Building a curated rootfs<a class="headerlink" href="#building-a-curated-rootfs" title="Permanent link">&para;</a></h3>
+<p>The same pattern produces a reusable rootfs — typically an org's hardened or pre-provisioned baseline. Layer your customisation on top of a vanilla distribution rootfs, then publish under your org's namespace.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c"># myorg-base-1.0.umf</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>ROOTFS<span class="w"> </span>debian:bookworm
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">RUN</span><span class="w"> </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>--no-install-recommends<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span>ca-certificates<span class="w"> </span>curl<span class="w"> </span>jq<span class="w"> </span>systemd-resolved<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span>apt-get<span class="w"> </span>clean<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/var/lib/apt/lists/*
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="k">ADD</span><span class="w"> </span>./certs/myorg-ca.crt<span class="w"> </span>/usr/local/share/ca-certificates/myorg-ca.crt
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="k">RUN</span><span class="w"> </span>update-ca-certificates
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.type<span class="o">=</span>rootfs
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.rootfs.org<span class="o">=</span>myorg
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.rootfs.version<span class="o">=</span><span class="m">1</span>.0
+</code></pre></div>
+<p>Publish under your org's rootfs namespace:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>umf<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>registry.example.com/rootfs/myorg-base:1.0<span class="w"> </span>.
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>umf<span class="w"> </span>push<span class="w"> </span>registry.example.com/rootfs/myorg-base:1.0
+</code></pre></div>
+<p>Downstream builds reference it as a normal ROOTFS:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ROOTFS<span class="w"> </span>myorg-base:1.0
+</code></pre></div>
+<h3 id="building-a-bootloader">Building a bootloader<a class="headerlink" href="#building-a-bootloader" title="Permanent link">&para;</a></h3>
+<p>Bootloaders follow the same shape: a UMF build whose output is the bootloader binary + assets, published under your registry. Downstream builds reference it via <code>BOOTLOADER &lt;name&gt;</code>. Use this when you need a signed or pinned bootloader (Secure Boot, fleet-locked GRUB config) instead of the upstream-tracking default.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c"># myorg-grub-2.12.umf</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>ROOTFS<span class="w"> </span>alpine:3.21
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>BOOTLOADER<span class="w"> </span>grub
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="k">ADD</span><span class="w"> </span>./grub.cfg<span class="w"> </span>/etc/default/grub
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">RUN</span><span class="w"> </span>grub-mkconfig<span class="w"> </span>-o<span class="w"> </span>/boot/grub/grub.cfg
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.type<span class="o">=</span>bootloader
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.bootloader.flavor<span class="o">=</span>grub
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.bootloader.version<span class="o">=</span><span class="m">2</span>.12
+</code></pre></div>
+<hr />
+<h2 id="composing-artifacts">Composing artifacts<a class="headerlink" href="#composing-artifacts" title="Permanent link">&para;</a></h2>
+<h3 id="full-vm-image-from-custom-components">Full VM image from custom components<a class="headerlink" href="#full-vm-image-from-custom-components" title="Permanent link">&para;</a></h3>
+<p>Once your kernel and rootfs are published, a downstream VM build composes them by reference. The KERNEL and ROOTFS resolvers hit the registry — no source rebuild, no upstream pull.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>FIRMWARE<span class="w"> </span>uefi
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>BOOTLOADER<span class="w"> </span>systemd-boot
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>ROOTFS<span class="w"> </span>myorg-base:1.0
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>KERNEL<span class="w"> </span>linux:v7.0
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>INITRD<span class="w"> </span>auto
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.author<span class="o">=</span><span class="s2">&quot;&lt;author&gt;&quot;</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="k">LABEL</span><span class="w"> </span>org.imagilux.umf.name<span class="o">=</span><span class="s2">&quot;webserver&quot;</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="k">RUN</span><span class="w"> </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>nginx
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="k">ADD</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/nginx.conf
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">80/tcp</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">443/tcp</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>ENABLE<span class="w"> </span>nginx.service
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>HOSTNAME<span class="w"> </span>webserver
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>TIMEZONE<span class="w"> </span>Europe/Paris
+</code></pre></div>
+<p>This is the payoff of OCI-native distribution: the heavy artifacts (kernel, rootfs) are built once per release and pulled by every downstream build.</p>
+<h3 id="distro-base-vm-simplified">Distro-base VM (simplified)<a class="headerlink" href="#distro-base-vm-simplified" title="Permanent link">&para;</a></h3>
+<p>When you don't need a custom boot chain, <code>FROM &lt;distro&gt;:&lt;release&gt;</code> collapses the boot chain directives into a vanilla distro image. The boot chain is inherited from the base; you only add user-space layers.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">ubuntu:24.04</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">RUN</span><span class="w"> </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>nginx
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">ADD</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/nginx.conf
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">80/tcp</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>ENABLE<span class="w"> </span>nginx.service
+</code></pre></div>
+<hr />
+<h2 id="target-variations">Target variations<a class="headerlink" href="#target-variations" title="Permanent link">&para;</a></h2>
+<p>The same component artifacts compose into different targets by varying the boot chain and ENTRYPOINT.</p>
+<h3 id="unikernel-payload">Unikernel payload<a class="headerlink" href="#unikernel-payload" title="Permanent link">&para;</a></h3>
+<p><code>ENTRYPOINT binary</code> runs the executable directly as PID 1 — no init system, no userland. Pair with <code>ROOTFS none</code> and <code>INITRD none</code> for the minimal unikernel shape.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>FIRMWARE<span class="w"> </span>uefi
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>BOOTLOADER<span class="w"> </span>none
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>KERNEL<span class="w"> </span>linux:v7.0
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>INITRD<span class="w"> </span>none
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>ROOTFS<span class="w"> </span>none
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="k">ENTRYPOINT</span><span class="w"> </span>binary
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="k">ADD</span><span class="w"> </span>myapp<span class="w"> </span>/myapp
+</code></pre></div>
+<h3 id="container-degenerate-case">Container (degenerate case)<a class="headerlink" href="#container-degenerate-case" title="Permanent link">&para;</a></h3>
+<p>Drop the boot chain entirely — no firmware, no bootloader, no kernel, no initrd. The result is an ordinary OCI container image; runtime supplies PID 1 (<code>ENTRYPOINT none</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>ROOTFS<span class="w"> </span>alpine:3.21
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">ENTRYPOINT</span><span class="w"> </span>none
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="k">RUN</span><span class="w"> </span>apk<span class="w"> </span>add<span class="w"> </span>--no-cache<span class="w"> </span>nginx
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="k">ADD</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/nginx.conf
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">80/tcp</span>
+</code></pre></div>
+<hr />
+<p>For the full directive reference and resolution rules these workflows depend on, see the <a href="../specification/">Specification</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.expand", "content.code.copy", "content.code.annotate", "toc.follow", "toc.integrate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

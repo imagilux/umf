@@ -1,0 +1,1315 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Dockerfile-inspired DSL for building universal bootable artifacts (VM, bootc, unikernel, container)">
+      
+      
+        <meta name="author" content="Gaël THEROND / Imagilux">
+      
+      
+      
+        <link rel="prev" href="../compatibility/">
+      
+      
+        <link rel="next" href="../examples/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Specification - UMF — Universal Machine Format</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter+Tight:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter Tight";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/imagilux.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#specification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="UMF — Universal Machine Format" class="md-header__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            UMF — Universal Machine Format
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Specification
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="UMF — Universal Machine Format" class="md-nav__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    UMF — Universal Machine Format
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specification
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#build-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#artifact-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact Resolution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#l0-introspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L0 Introspection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#directives-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directives Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Directives Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FROM
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#label" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LABEL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#env" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ENV
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#arg" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ARG
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#firmware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FIRMWARE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootloader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BOOTLOADER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rootfs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ROOTFS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KERNEL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#initrd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INITRD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SHELL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workdir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WORKDIR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RUN
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#add" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ADD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entrypoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ENTRYPOINT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EXPOSE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#enable-disable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ENABLE / DISABLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hostname" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HOSTNAME
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#locale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOCALE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timezone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TIMEZONE
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="specification">Specification<a class="headerlink" href="#specification" title="Permanent link">&para;</a></h1>
+<p>The normative reference for UMF directive behavior, build order, and artifact resolution.</p>
+<p>For the project pitch, design rationale, and target matrix, see <a href="../">Overview</a>. For end-to-end workflows (building a kernel, rootfs, composing a VM), see <a href="../examples/">Examples</a>.</p>
+<hr />
+<h2 id="build-order">Build Order<a class="headerlink" href="#build-order" title="Permanent link">&para;</a></h2>
+<p>The build pipeline processes directives in a strict dependency order. Each major phase produces one or more OCI layers.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>FIRMWARE (L0) → BOOTLOADER (L0) → ROOTFS (L1) → KERNEL (L2) → INITRD (L3) → RUN/ADD/... (L4+)
+</code></pre></div>
+<ul>
+<li><strong>L0</strong> — Boot partition: FIRMWARE creates the partition layout (GPT/ESP), BOOTLOADER installs into it. Single layer.</li>
+<li><strong>L1</strong> — Root filesystem: distro-specific base rootfs unpacked onto the root partition.</li>
+<li><strong>L2</strong> — Kernel: built from source (kernel.org) or pulled as a pre-built OCI artifact, installed into L1's <code>/boot</code> and <code>/lib/modules</code>.</li>
+<li><strong>L3</strong> — Initramfs: generated from L2's modules and L1's filesystem context. Always produced after KERNEL + ROOTFS so it includes the correct drivers.</li>
+<li><strong>L4+</strong> — User-space layers: RUN, ADD, ENV, etc. Standard layer stacking with caching semantics identical to Docker.</li>
+</ul>
+<h2 id="artifact-resolution">Artifact Resolution<a class="headerlink" href="#artifact-resolution" title="Permanent link">&para;</a></h2>
+<p>Every component directive (KERNEL, BOOTLOADER, ROOTFS, etc.) follows the same resolution chain:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Registry lookup → Local cache → Build from source
+</code></pre></div>
+<p>This means any UMF file can bootstrap on a fully air-gapped, single-node setup — you pay the build-time penalty once, then artifacts are cached locally. Stand up a local registry and other nodes pull from it. Federate registries across sites for a full supply chain. Entry at any point in the chain works.</p>
+<h2 id="l0-introspection">L0 Introspection<a class="headerlink" href="#l0-introspection" title="Permanent link">&para;</a></h2>
+<p>Every UMF artifact self-describes its target type via the <code>org.imagilux.umf.type</code> label set at build time. When a downstream build's <code>FROM</code> resolves to an OCI artifact, the builder reads that label — and, when absent, infers from manifest structure (presence of boot-chain layers, ENTRYPOINT value) — to determine the legal directive set, the RUN execution environment, and the active mode of any multi-mode directive.</p>
+<p>The rule is single-sourced from the L0 type rather than per-directive exclusion tables:</p>
+<ul>
+<li><strong><code>FROM scratch</code></strong> — blank L0. The full boot chain (FIRMWARE, BOOTLOADER, ROOTFS, KERNEL, INITRD) is unlocked; this is how a new bootable artifact is constructed from zero.</li>
+<li><strong>L0 is container-shaped</strong> (rootfs only, no boot chain) — userspace directives (RUN, ADD, ENV, …) layer on top. RUN executes in a container. KERNEL in this context operates in <em>producer mode</em>: it fetches Linux sources at the requested release, applies the <code>.config</code> supplied via <code>ADD ./&lt;path&gt; /.config</code>, compiles against the toolchain present in L0, and emits a kernel artifact.</li>
+<li><strong>L0 is VM- or bootc-shaped</strong> (boot chain present) — userspace directives layer on top, but re-declaring boot-chain directives is an error (the chain is already baked in). RUN executes in a micro-VM booted from the current layer state.</li>
+<li><strong>L0 is a component payload</strong> (a published kernel, bootloader, or standalone rootfs) — not a valid <code>FROM</code> by itself; these are payloads to be installed by a parent build, not starting points. The builder rejects with a clear error.</li>
+</ul>
+<p>This is what makes UMF recursive. A kernel build <code>FROM</code>'s a container-shaped kernel-build-env. That env was itself built <code>FROM debian:bookworm</code>, also container-shaped. Walking the chain requires no special cases — the same introspection rule applies at every level.</p>
+<hr />
+<h2 id="directives-reference">Directives Reference<a class="headerlink" href="#directives-reference" title="Permanent link">&para;</a></h2>
+<h3 id="from">FROM<a class="headerlink" href="#from" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>image_name:release</code> | <code>scratch</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>scratch</code> implied when not provided</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Excludes</td>
+<td>Determined by L0 introspection — see <a href="#l0-introspection">L0 Introspection</a></td>
+</tr>
+</tbody>
+</table>
+<p>Creates the first layer (L0) from <code>scratch</code> (blank, full boot chain unlocked) or from an existing OCI artifact, which the builder introspects to determine the legal directive set for the layers that follow.</p>
+<p>When <code>image_name:release</code> resolves to a UMF artifact, the builder reads <code>org.imagilux.umf.type</code> and applies the corresponding rules (see <a href="#l0-introspection">L0 Introspection</a>). Non-UMF OCI images are treated as container-shaped L0 by default.</p>
+<h4 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">&lt;image&gt;:&lt;release&gt;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+</code></pre></div>
+<h3 id="label">LABEL<a class="headerlink" href="#label" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Key/value metadata written to the OCI manifest. Used for structural information:</p>
+<ul>
+<li>Organization, author, name, release/version</li>
+<li>Description, tags</li>
+<li>Artifact type hints (e.g. <code>org.imagilux.umf.type=kernel</code>)</li>
+<li>Arbitrary metadata</li>
+</ul>
+<p>Labels are inherited from previous layers when building on top of an existing image.</p>
+<h4 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">LABEL</span><span class="w"> </span>&lt;key&gt;<span class="o">=</span>&lt;value&gt;
+</code></pre></div>
+<h3 id="env">ENV<a class="headerlink" href="#env" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Sets environment variables that are embedded in the image and persist at runtime.</p>
+<h4 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">ENV</span><span class="w"> </span>&lt;key&gt;<span class="o">=</span>&lt;value&gt;
+</code></pre></div>
+<h3 id="arg">ARG<a class="headerlink" href="#arg" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Build-time only variables. Not kept in the final image.</p>
+<h4 id="example_3">Example<a class="headerlink" href="#example_3" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">ARG</span><span class="w"> </span>&lt;name&gt;<span class="o">=</span>&lt;default&gt;
+</code></pre></div>
+<h3 id="firmware">FIRMWARE<a class="headerlink" href="#firmware" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional (only when <code>FROM scratch</code>)</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>uefi</code> | <code>uefi-secure</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>uefi</code> implied when not provided</td>
+</tr>
+</tbody>
+</table>
+<p>Creates L0 of the artifact when <code>FROM</code> is <code>scratch</code> or absent. Defines the boot chain type and creates the boot partition. UMF is UEFI-only; BIOS / MBR is not supported.</p>
+<p>Partition layout:</p>
+<ul>
+<li>Format: GPT</li>
+<li>Flags: ESP, BOOT</li>
+<li>Filesystem: FAT32</li>
+<li>Size: 500MB</li>
+</ul>
+<h4 id="example_4">Example<a class="headerlink" href="#example_4" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>FIRMWARE<span class="w"> </span>uefi
+</code></pre></div>
+<h3 id="bootloader">BOOTLOADER<a class="headerlink" href="#bootloader" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>grub</code> | <code>systemd-boot</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>systemd-boot</code></td>
+</tr>
+</tbody>
+</table>
+<p>Installs the chosen bootloader onto the L0 boot partition.</p>
+<h4 id="example_5">Example<a class="headerlink" href="#example_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>BOOTLOADER<span class="w"> </span>systemd-boot
+</code></pre></div>
+<h3 id="rootfs">ROOTFS<a class="headerlink" href="#rootfs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>distribution:release</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>none</code></td>
+</tr>
+</tbody>
+</table>
+<p>Unpacks a distro-specific root filesystem onto the root partition (L1). This provides the base userland (package manager, libc, core utilities) without a kernel.</p>
+<h4 id="example_6">Example<a class="headerlink" href="#example_6" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>ROOTFS<span class="w"> </span>&lt;distribution&gt;:&lt;release&gt;
+</code></pre></div>
+<h3 id="kernel">KERNEL<a class="headerlink" href="#kernel" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>linux:release</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td>Upstream LTS</td>
+</tr>
+</tbody>
+</table>
+<p>KERNEL has two modes, selected by L0 introspection (see <a href="#l0-introspection">L0 Introspection</a>):</p>
+<ul>
+<li><strong>Consumer mode</strong> — <code>FROM scratch</code> with a boot chain. Resolves a pre-built kernel artifact and installs it as L2: the kernel image into L1's <code>/boot</code>, modules into <code>/lib/modules/&lt;release&gt;</code>. Resolution: <strong>registry → local cache → upstream source build</strong>.</li>
+<li><strong>Producer mode</strong> — <code>FROM</code> a container-shaped build env. Fetches Linux sources at the requested release, applies the kernel <code>.config</code> supplied via <code>ADD ./&lt;path&gt; /.config</code> in the build, compiles against the toolchain present in L0, and emits a kernel artifact. The result is what consumer-mode KERNEL elsewhere will resolve.</li>
+</ul>
+<p>The release string maps 1:1 to <code>torvalds/linux</code> git tags — <code>KERNEL linux:v7.0</code> resolves to upstream <code>v7.0</code>.</p>
+<h4 id="example_7">Example<a class="headerlink" href="#example_7" title="Permanent link">&para;</a></h4>
+<p>Consumer (in a VM build):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>KERNEL<span class="w"> </span>linux:v7.0
+</code></pre></div>
+<p>Producer (in a kernel-build artifact):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">FROM</span><span class="w"> </span><span class="s">imagilux/kernel-build-env:v1</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>KERNEL<span class="w"> </span>linux:v7.0
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">ADD</span><span class="w"> </span>./config/default<span class="w"> </span>/.config
+</code></pre></div>
+<h3 id="initrd">INITRD<a class="headerlink" href="#initrd" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>auto</code> | <code>dracut</code> | <code>mkinitramfs</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>auto</code></td>
+</tr>
+</tbody>
+</table>
+<p>Generates an initramfs (L3). Always processed after KERNEL + ROOTFS to ensure correct module and driver inclusion.</p>
+<p><code>auto</code> selects the appropriate generator based on the ROOTFS distribution.</p>
+<h4 id="example_8">Example<a class="headerlink" href="#example_8" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>INITRD<span class="w"> </span>auto
+</code></pre></div>
+<h3 id="shell">SHELL<a class="headerlink" href="#shell" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>bash</code> | <code>sh</code> | <code>powershell</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>sh</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sets which shell is used to execute RUN instructions.</p>
+<h4 id="example_9">Example<a class="headerlink" href="#example_9" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>SHELL<span class="w"> </span>sh
+</code></pre></div>
+<h3 id="user">USER<a class="headerlink" href="#user" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>root</code></td>
+</tr>
+</tbody>
+</table>
+<p>Switches the execution context to the specified user. Creates the user if it does not exist.</p>
+<h4 id="example_10">Example<a class="headerlink" href="#example_10" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">USER</span><span class="w"> </span><span class="s">&lt;username&gt;</span>
+</code></pre></div>
+<h3 id="workdir">WORKDIR<a class="headerlink" href="#workdir" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>/</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sets the working directory for subsequent instructions. Creates the directory if it does not exist.</p>
+<h4 id="example_11">Example<a class="headerlink" href="#example_11" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">WORKDIR</span><span class="w"> </span><span class="s">&lt;path&gt;</span>
+</code></pre></div>
+<h3 id="run">RUN<a class="headerlink" href="#run" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Executes a command inside the build environment. Each RUN produces a new layer (filesystem diff).</p>
+<p>In VM mode, the build environment is a micro-VM booted from the current layer state. In container-target mode, behaves identically to Docker's RUN.</p>
+<p>Supports both shell form and exec form (shown below).</p>
+<h4 id="example_12">Example<a class="headerlink" href="#example_12" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">RUN</span><span class="w"> </span>&lt;command&gt;
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="k">RUN</span><span class="w"> </span><span class="o">[</span><span class="s2">&quot;&lt;command&gt;&quot;</span>,<span class="w"> </span><span class="s2">&quot;&lt;arg&gt;&quot;</span><span class="o">]</span>
+</code></pre></div>
+<h3 id="add">ADD<a class="headerlink" href="#add" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Copies files and directories from the build context into the image. Merges Docker's COPY and ADD into a single directive. Supports local paths, URLs, and archive auto-extraction.</p>
+<h4 id="example_13">Example<a class="headerlink" href="#example_13" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">ADD</span><span class="w"> </span>&lt;source&gt;<span class="w"> </span>&lt;destination&gt;
+</code></pre></div>
+<h3 id="entrypoint">ENTRYPOINT<a class="headerlink" href="#entrypoint" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Values</td>
+<td><code>systemd</code> | <code>openrc</code> | <code>binary</code> | <code>none</code></td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>systemd</code></td>
+</tr>
+</tbody>
+</table>
+<p>Defines the init system / PID 1 process.</p>
+<ul>
+<li><code>systemd</code> — full systemd init (typical for VM and bootc targets)</li>
+<li><code>openrc</code> — OpenRC init (Alpine and similar)</li>
+<li><code>binary</code> — direct binary execution, no init system (unikernel target)</li>
+<li><code>none</code> — no init, useful for container targets where the runtime provides it</li>
+</ul>
+<h4 id="example_14">Example<a class="headerlink" href="#example_14" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">ENTRYPOINT</span><span class="w"> </span>systemd
+</code></pre></div>
+<h3 id="expose">EXPOSE<a class="headerlink" href="#expose" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Default</td>
+<td>Block all</td>
+</tr>
+</tbody>
+</table>
+<p>Creates actual nftables firewall rules in the image. Unlike Docker's EXPOSE (which is purely metadata), UMF's EXPOSE has enforcement semantics.</p>
+<p>Default policy is <strong>block all</strong> — only explicitly exposed ports are reachable.</p>
+<h4 id="example_15">Example<a class="headerlink" href="#example_15" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">&lt;port&gt;/&lt;protocol&gt;</span>
+</code></pre></div>
+<h3 id="enable-disable">ENABLE / DISABLE<a class="headerlink" href="#enable-disable" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Multiple</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>Manages init system service units. Works with both systemd and OpenRC depending on the ENTRYPOINT selection.</p>
+<h4 id="example_16">Example<a class="headerlink" href="#example_16" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>ENABLE<span class="w"> </span>&lt;service&gt;
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>DISABLE<span class="w"> </span>&lt;service&gt;
+</code></pre></div>
+<h3 id="hostname">HOSTNAME<a class="headerlink" href="#hostname" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+</tbody>
+</table>
+<p>Sets the system hostname in the image.</p>
+<h4 id="example_17">Example<a class="headerlink" href="#example_17" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>HOSTNAME<span class="w"> </span>&lt;hostname&gt;
+</code></pre></div>
+<h3 id="locale">LOCALE<a class="headerlink" href="#locale" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>en_US.UTF-8</code></td>
+</tr>
+</tbody>
+</table>
+<p>Configures the system locale.</p>
+<h4 id="example_18">Example<a class="headerlink" href="#example_18" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>LOCALE<span class="w"> </span>&lt;locale&gt;
+</code></pre></div>
+<h3 id="timezone">TIMEZONE<a class="headerlink" href="#timezone" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Default</td>
+<td><code>UTC</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sets the system timezone.</p>
+<h4 id="example_19">Example<a class="headerlink" href="#example_19" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>TIMEZONE<span class="w"> </span>&lt;timezone&gt;
+</code></pre></div>
+<hr />
+<p><em>This document captures the current state of the UMF design as of initial brainstorming. Directives, defaults, and semantics are subject to revision.</em></p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.expand", "content.code.copy", "content.code.annotate", "toc.follow", "toc.integrate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
