@@ -19,7 +19,7 @@ UMF — *Universal* Machine Format. Matches the repo directory name `umf/` and i
 ## Design pillars
 
 1. **One DSL, four targets** (VM / bootc / unikernel / container) — target is inferred from the combination of directives, not declared explicitly.
-2. **OCI-native** — every component, including kernels and bootloaders, ships as an OCI artifact in a standard registry. A kernel artifact is itself a UMF build (`FROM scratch` + `KERNEL linux:x.y.z`); the system self-hosts.
+2. **OCI-native** — every component, including kernels, bootloaders, and build environments, ships as an OCI artifact in a standard registry. A kernel artifact is itself a UMF build that `FROM`'s a kernel-build-env (which is itself a UMF build); the system self-hosts at every level.
 3. **Sovereignty-first** — any artifact is buildable from source on an air-gapped node. Registries and caches accelerate but are never required.
 4. **Composable supply chain** — components are independently versioned; the same `registry → local cache → source build` resolution applies to every component directive (KERNEL, BOOTLOADER, ROOTFS, …).
 
@@ -35,7 +35,7 @@ L4+ RUN / ADD / ENV / ...     user-space, Docker-equivalent caching semantics
 
 ## Directive groups
 
-- **Boot chain** (only valid with `FROM scratch`): FIRMWARE, BOOTLOADER, ROOTFS, KERNEL, INITRD
+- **Boot chain** (constructing one requires `FROM scratch`): FIRMWARE, BOOTLOADER, ROOTFS, KERNEL, INITRD. KERNEL also has a producer mode under a container-shaped `FROM` that emits a kernel artifact instead of consuming one — see L0 introspection.
 - **Metadata**: FROM, LABEL, ENV, ARG
 - **Build steps**: SHELL, USER, WORKDIR, RUN, ADD
 - **Runtime config**: ENTRYPOINT, EXPOSE, ENABLE/DISABLE, HOSTNAME, LOCALE, TIMEZONE
@@ -52,8 +52,9 @@ These directives diverge from Docker semantics — relying on Docker intuition w
 
 - **EXPOSE** emits actual nftables rules with **default-deny**. Not metadata. Only explicitly-exposed ports are reachable.
 - **ENTRYPOINT** selects the init system / PID 1 (`systemd` / `openrc` / `binary` / `none`), not just an exec command. This is what makes the unikernel target work — `ENTRYPOINT binary` runs the executable directly, no init.
-- **FROM image:tag** mutually excludes FIRMWARE, BOOTLOADER, KERNEL, INITRD, ROOTFS. Only `FROM scratch` unlocks the boot chain.
-- **RUN** in VM-target mode executes inside a micro-VM booted from the current layer state, not in a container.
+- **FROM** is structurally introspected. The builder reads `org.imagilux.umf.type` (or infers from manifest structure) on the resolved L0 and derives the legal directive set + multi-mode directive selection from it. `FROM scratch` unlocks the full boot chain. Container-shaped L0 (rootfs only) puts KERNEL in producer mode (compile + emit). VM/bootc-shaped L0 forbids re-declaring already-baked boot-chain directives. Component payloads (published kernels, bootloaders, standalone rootfs) are not valid as `FROM` — they are payloads, not starting points.
+- **RUN** execution depends on L0 shape: container-shaped → container, VM/bootc-shaped → micro-VM booted from the current layer state. Not a per-target switch — derived from L0 introspection.
+- **KERNEL** has two modes selected by L0 introspection: producer (FROM container-shaped build env, fetches sources + applies `/.config` + compiles + emits a kernel artifact) and consumer (FROM scratch with boot chain, resolves a pre-built kernel artifact into `/boot` + `/lib/modules`).
 
 ## Adopted Docker conventions (no surprises here)
 
@@ -74,6 +75,8 @@ The spec's original "Open Questions" section was resolved and removed from the s
 - **Cloud-init / Ignition**: no directive. Documented pattern using existing primitives — `ADD ./user-data /var/lib/cloud/seed/nocloud/user-data` + `ENABLE cloud-init.service`. Same shape for ignition. DSL stays agnostic of first-boot tooling.
 - **Secure Boot key delivery**: BuildKit-style mounted secrets (see "Adopted Docker conventions" above). Documentation must cover both the sovereign air-gapped flow (operator-supplied local file) and the CI flow (secret manager mount).
 - **UEFI-only.** BIOS / MBR is dropped. `FIRMWARE` accepts `uefi` and `uefi-secure` only; the boot partition is always GPT/ESP. Future spec revisions should not re-introduce a `bios` value.
+- **FROM is structurally introspected.** Legal directive set, RUN execution environment, and multi-mode directive selection (notably KERNEL's producer vs consumer mode) all derive from the L0 artifact's `org.imagilux.umf.type` label or inferred manifest structure — not from a per-directive exclusion table. This makes UMF recursive: a kernel build's build env is itself a UMF container artifact, the same rules apply at every level. Future spec revisions should not re-introduce hard-coded FROM exclusion lists.
+- **Kernel builds run on an explicit build env.** A kernel artifact is produced by a UMF build that `FROM`'s a container-shaped `kernel-build-env` artifact (which carries gcc/make/the kernel's required libs). The env is published, signable, swappable — the LLVM/clang/Rust-in-kernel escape hatch is "publish a different env and `FROM` it", no new directives. Future spec revisions should not introduce builder-supplied implicit toolchains.
 
 ## Repo layout
 

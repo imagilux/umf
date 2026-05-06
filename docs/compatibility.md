@@ -33,6 +33,10 @@ Single-binary payload that runs as PID 1 directly on the kernel — no userland,
 
 The degenerate case: no boot chain at all. Standard OCI container image with a rootfs; runtime supplies PID 1 (`ENTRYPOINT none`).
 
+### Component artifacts
+
+Component artifacts (kernel, kernel-build-env, rootfs, bootloader — anything published for downstream consumption rather than direct boot) sit structurally in the container column above. They aren't intended to run directly; they're inputs to a parent build that consumes them via the corresponding component directive (KERNEL, ROOTFS, BOOTLOADER) or via FROM (build envs, derivative bases). See [L0 Introspection](specification.md#l0-introspection) for the rules that govern when each kind is a valid `FROM`.
+
 ---
 
 For the directive semantics behind each row, see the [Specification](specification.md). For working configurations of each target, see [Examples](examples.md).
