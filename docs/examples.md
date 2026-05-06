@@ -12,28 +12,56 @@ The workflows below follow that progression: build the components, then assemble
 
 A kernel is a UMF build whose payload is the compiled kernel + modules. Downstream builds consume it via `KERNEL <name>:<release>`; the resolver pulls it from the registry, falling back to local cache, then to upstream source.
 
-```dockerfile
-# kernel-6.12.21.umf
-FROM scratch
-FIRMWARE uefi
-BOOTLOADER none
-ROOTFS alpine:3.21
-KERNEL linux:6.12.21
-INITRD none
+The kernel build is a *producer*: it fetches sources, applies a config, compiles, and emits the artifact. It runs on top of a container-shaped build env that supplies the toolchain (gcc, make, and the kernel's required libs). Three lines are sufficient:
 
-LABEL org.imagilux.umf.type=kernel
-LABEL org.imagilux.umf.kernel.version=6.12.21
-LABEL org.imagilux.umf.kernel.config=default
+```dockerfile
+# kernel-v7.0.umf
+FROM imagilux/kernel-build-env:v1
+KERNEL linux:v7.0
+ADD ./config/default /.config
 ```
+
+`FROM imagilux/kernel-build-env:v1` is the container-shaped UMF artifact carrying the toolchain — a normal OCI image, resolved through the same `registry → cache → source` chain as everything else. `KERNEL linux:v7.0` selects the upstream source release; the `v` prefix maps 1:1 to `torvalds/linux` git tags. `ADD ./config/default /.config` drops the kernel `.config` at the build's source-tree root for the build to pick up.
+
+Because the L0 here is container-shaped, KERNEL operates in *producer mode* (compile and emit). In a downstream VM build, `FROM scratch` + a boot chain puts the same directive in *consumer mode* (resolve and install). See [L0 Introspection](specification.md#l0-introspection) for the rule.
+
+LABELs are optional but conventional when publishing — `org.imagilux.umf.type=kernel`, `org.imagilux.umf.kernel.version=v7.0`, `org.imagilux.umf.kernel.config=default` make the artifact self-describing in a registry.
 
 Build and publish:
 
 ```bash
-umf build -t registry.example.com/kernels/linux:6.12.21 .
-umf push registry.example.com/kernels/linux:6.12.21
+umf build -t registry.example.com/kernels/linux:v7.0 .
+umf push registry.example.com/kernels/linux:v7.0
 ```
 
-Downstream builds that reference `KERNEL linux:6.12.21` now resolve to this artifact instead of triggering an upstream source build.
+Downstream builds that reference `KERNEL linux:v7.0` now resolve to this artifact instead of triggering an upstream source build.
+
+### Building a kernel-build-env
+
+The build env that the kernel build `FROM`'s is itself a UMF artifact — no hidden builder magic, no implicit toolchain injection. It's a container target (rootfs + tools, no boot chain), built and published like any other component:
+
+```dockerfile
+# kernel-build-env-v1.umf
+FROM debian:bookworm
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bc bison cpio flex gcc kmod libelf-dev libssl-dev make perl rsync zstd && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+LABEL org.imagilux.umf.type=kernel-build-env
+LABEL org.imagilux.umf.kernel-build-env.version=v1
+LABEL org.imagilux.umf.kernel-build-env.toolchain=gcc
+```
+
+Publish:
+
+```bash
+umf build -t registry.example.com/kernel-build-env:v1 .
+umf push registry.example.com/kernel-build-env:v1
+```
+
+Variants are just different artifacts: swap `gcc` for `clang lld llvm`, retag as `:v1-llvm`, set `kernel-build-env.toolchain=llvm`, and a downstream kernel build `FROM`'s `myorg/kernel-build-env:v1-llvm` to compile a clang-built kernel. Custom patches, Rust-in-kernel, vendor toolchains — same shape, no new directives required.
 
 ### Building a curated rootfs
 
@@ -101,7 +129,7 @@ FROM scratch
 FIRMWARE uefi
 BOOTLOADER systemd-boot
 ROOTFS myorg-base:1.0
-KERNEL linux:6.12.21
+KERNEL linux:v7.0
 INITRD auto
 
 LABEL org.imagilux.umf.author="<author>"
@@ -146,7 +174,7 @@ The same component artifacts compose into different targets by varying the boot 
 FROM scratch
 FIRMWARE uefi
 BOOTLOADER none
-KERNEL linux:6.12.21
+KERNEL linux:v7.0
 INITRD none
 ROOTFS none
 ENTRYPOINT binary
