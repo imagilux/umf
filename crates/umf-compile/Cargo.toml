@@ -1,0 +1,26 @@
+[package]
+name = "umf-compile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF disk projector — project a bootable-OS OCI image into a block disk image (GPT/ESP, classic or UKI)"
+
+[dependencies]
+umf-core = { workspace = true }
+umf-oci = { workspace = true }
+backhand = { workspace = true }
+fatfs = { workspace = true }
+gpt = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+
+[lints]
+workspace = true

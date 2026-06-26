@@ -1,0 +1,130 @@
+name: Rust CI
+
+# Runs the Rust workspace's format / lint / test checks on every PR and on
+# every push to main.
+#
+# No path filter. Earlier this workflow tried to skip docs-only PRs to save
+# CI minutes, but the path filter interacted badly with main's required
+# status check: a docs-only PR didn't trigger the workflow at all, the
+# required `fmt / clippy / test` check never appeared, and the merge was
+# blocked indefinitely. With cached deps the workflow runs in ~50s, which is
+# a cheap price for not having that footgun.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        # rust-toolchain.toml pins the channel and components; the action
+        # installs whatever it specifies (stable + rustfmt + clippy).
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install libseccomp
+        # umf-engine builds libcontainer with its `libseccomp` feature on, which
+        # links the system libseccomp C library + headers. Install them before
+        # any cargo step that compiles the workspace (#231).
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: subprocess guardrail
+        # Enforces the "no scattered Command::new for container runtimes
+        # / VMM binaries" contract from #101 (Round 7). The script
+        # passes only when every shell-out to runc/crun/youki/docker/
+        # podman is gone, and qemu / cloud-hypervisor spawn calls live
+        # only inside their per-backend spawn helper. See the script
+        # for the temporary allowlist (round-trip tests scheduled for
+        # removal with #100).
+        run: ./scripts/check-subprocess-calls.sh
+
+      - name: cargo test
+        run: cargo test --workspace --no-fail-fast
+
+      - name: cargo build --release --bin umf
+        # Smoke-test that the release-mode binary actually compiles on
+        # every PR. Catches release-only issues (aggressive optimization
+        # warnings promoted to errors, conditional-compilation gaps, etc.)
+        # before they hit the tag-triggered release workflow.
+        # The cache from earlier steps keeps this around ~30-60s.
+        run: cargo build --release --locked --bin umf
+
+      - name: cargo deny check
+        # License allowlist + advisory check. Config lives in deny.toml.
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      - name: Post status to UMF - Release v1 project
+        # Records a "CI - Rust: passed/failed" entry on the GitHub Project so
+        # the roadmap board carries a per-run health log.
+        #
+        # Gated behind the ENABLE_PROJECT_SYNC repo variable so this
+        # org-specific board wiring (board id + PAT) stays opt-in and the
+        # public workflow carries no private-infra coupling: forks and
+        # repos without the variable set simply skip the step (#291).
+        #
+        # Only runs on pushes to main — PR runs are too noisy. Skips silently
+        # if PROJECT_PAT isn't set (e.g. on a fork) so missing secrets don't
+        # break CI.
+        #
+        # Requires a repo secret PROJECT_PAT — a Personal Access Token (classic
+        # with `project` scope, or fine-grained with `Projects: read and write`
+        # on the imagilux org) so we can write to the org-scoped Projects v2
+        # board (GITHUB_TOKEN can't, by design).
+        if: always() && vars.ENABLE_PROJECT_SYNC == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+          PROJECT_ID: PVT_kwDODchEp84BX-ap
+          PIPELINE_NAME: "CI - Rust"
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "PROJECT_PAT secret is not set; skipping project status update."
+            exit 0
+          fi
+          if [ "${JOB_STATUS}" = "success" ]; then
+            STATUS_ENUM=ON_TRACK
+            STATUS_LABEL=passed
+          else
+            STATUS_ENUM=AT_RISK
+            STATUS_LABEL=failed
+          fi
+          BODY=$(printf '**%s**: %s\n\nWorkflow run: %s\nCommit: %s\n' \
+            "${PIPELINE_NAME}" "${STATUS_LABEL}" "${RUN_URL}" "${COMMIT_SHA}")
+          gh api graphql \
+            -f projectId="${PROJECT_ID}" \
+            -f status="${STATUS_ENUM}" \
+            -f body="${BODY}" \
+            -f query='mutation($projectId: ID!, $body: String!, $status: ProjectV2StatusUpdateStatus!) {
+              createProjectV2StatusUpdate(input: {
+                projectId: $projectId
+                body: $body
+                status: $status
+              }) {
+                statusUpdate { id status }
+              }
+            }'

@@ -1,0 +1,56 @@
+[package]
+name = "umf-oci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF OCI primitives — image emission, registry client, on-disk layout cache, build staging."
+
+[features]
+# Enables `umf_oci::test_registry` — an in-process OCI distribution v2
+# server used by round-trip tests to push/pull against a real HTTP
+# endpoint without spinning up a `registry:2` container. Off by
+# default to keep the production dep footprint minimal.
+test-server = ["dep:axum", "dep:uuid"]
+
+[dependencies]
+umf-core = { workspace = true }
+axum = { workspace = true, optional = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+flate2 = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
+oci-client = { workspace = true }
+oci-spec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+# `time` for the registry client's retry backoff (`tokio::time::sleep`).
+tokio = { workspace = true, features = ["time"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, optional = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+# OCI image-spec JSON-schema conformance gate (OCI-1). The integration test
+# `tests/conformance_image_spec.rs` emits a manifest / config / index via the
+# emission API and validates each against the vendored draft-04 schemas under
+# `tests/fixtures/schemas/`. Runs unconditionally (no network, no host tools).
+jsonschema = { workspace = true }
+# Already a normal dependency; re-declared here so the integration tests can
+# name `umf_core::l0::L0Kind` when building an `ImageConfig` (e.g. a bootable
+# image's `umf_type`). No additional code is pulled in.
+umf-core = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

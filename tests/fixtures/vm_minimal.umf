@@ -1,0 +1,3 @@
+FROM imagilux/kernel-linux:7.0
+LABEL org.imagilux.umf.flavor=systemd-boot
+ENTRYPOINT /myapp

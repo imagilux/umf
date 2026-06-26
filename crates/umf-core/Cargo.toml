@@ -1,0 +1,23 @@
+[package]
+name = "umf-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF shared types, errors, AST, and OCI label namespace."
+
+[features]
+# Enables `serde::Serialize` + `serde::Deserialize` derives on every AST node,
+# the `Target` enum, and the `Error` type. Off by default — the AST is usable
+# without serde. The `umf` CLI enables this to support `umf parse --format=json`.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

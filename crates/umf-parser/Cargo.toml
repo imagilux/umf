@@ -1,0 +1,18 @@
+[package]
+name = "umf-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF source → AST parser."
+
+[dependencies]
+umf-core = { workspace = true }
+ariadne = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

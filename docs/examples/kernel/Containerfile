@@ -1,0 +1,46 @@
+# A Linux kernel OCI artifact built from torvalds/linux at the v7.0 tag.
+#
+# An ordinary CONTAINER build (FROM a base image, not a kernel): every RUN
+# executes in a container on the build-env's toolchain — there is no special
+# "kernel mode". The output is a plain OCI image labelled `type=kernel`; a
+# downstream *bootable* build consumes it via `FROM`, and `FROM` resolving to a
+# `type=kernel` artifact is precisely what marks that build bootable.
+FROM registry.bitswalk.net/examples/kernel-build-env:1.0
+
+# Version knobs as ENV (not ARG): ENV values are present in each RUN's
+# container environment and the shell expands $VAR. UMF does not substitute
+# ARG into RUN, so ARG would not work here.
+#
+# The git *tag* is v7.0; the resulting kernel *release* (VERSION.PATCHLEVEL.
+# SUBLEVEL) is 7.0.0 — the label and the on-disk vmlinuz/modules suffixes all
+# use 7.0.0 and must agree.
+ENV KERNEL_TAG="v7.0"
+ENV KERNEL_RELEASE="7.0.0"
+
+WORKDIR /usr/src
+
+# Fetch exactly the tagged tree, shallow (no history), from upstream.
+RUN git clone --depth 1 --branch "$KERNEL_TAG" \
+        https://github.com/torvalds/linux.git linux
+
+WORKDIR /usr/src/linux
+
+# Configure. `defconfig` is the arch's sane default; for a curated kernel,
+# `ADD ./config/myconfig .config` then `RUN make olddefconfig` instead.
+RUN make defconfig
+
+# Build the kernel image + modules. Empty LOCALVERSION keeps `make
+# kernelrelease` exactly equal to $KERNEL_RELEASE so the install paths match.
+RUN make -j"$(nproc)" LOCALVERSION= all
+
+# Lay the artifact down in the layout the FROM-kernel resolver expects:
+#   boot/vmlinuz-<release>   and   lib/modules/<release>/
+RUN install -Dm644 "$(make -s image_name)" "/boot/vmlinuz-$KERNEL_RELEASE" \
+ && make INSTALL_MOD_PATH=/ INSTALL_MOD_STRIP=1 modules_install
+
+# `type=kernel` is what lets a downstream bootable build's `FROM` validate this
+# artifact (L0 introspection); `kernel.release` MUST match the vmlinuz/modules
+# suffix written above.
+LABEL org.imagilux.umf.type=kernel
+LABEL org.imagilux.umf.kernel.release="7.0.0"
+LABEL org.imagilux.umf.kernel.config=defconfig

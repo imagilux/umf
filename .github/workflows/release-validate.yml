@@ -1,0 +1,101 @@
+name: Release Validate
+
+# PR-time validation of the release BUILD path — the parts of `release.yml` +
+# `Cross.toml` that otherwise run ONLY on a tag push, where a bug surfaces on a
+# published (immutable) tag instead of on a PR. An early release-candidate cut hit two such
+# bugs back-to-back, neither catchable on a PR before this lane existed (#310):
+#   1. the musl cross pre-build aborting under `set -u` (Cross.toml; fixed #308),
+#   2. the immutable-release publish flow (release.yml; fixed #309).
+#
+# This lane cross-builds the musl targets (exercising `Cross.toml`'s libseccomp
+# static pre-build + link) and one gnu release build, with the same `--release
+# --locked --bin umf` invocation as `release.yml`, but WITHOUT packaging or
+# publishing. The gnu native compilation is also covered by `rust.yml`; the
+# publish / immutable-release flow can't be dry-run without creating a release,
+# so it stays validated at release time (documented limitation).
+#
+# Path-filtered to the release-relevant files so it runs only when they change
+# (keeps cost sane). It is deliberately NOT wired as a required status check: a
+# path filter on a required check silently merge-blocks PRs that don't touch the
+# filtered paths (the #291 footgun).
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-validate.yml"
+      - "Cross.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: release-build / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel siblings on one failure — see every target's outcome,
+      # mirroring release.yml.
+      fail-fast: false
+      matrix:
+        include:
+          # A native gnu release build (validates the `--release --locked`
+          # profile + the system-libseccomp link). aarch64-gnu is omitted: it
+          # needs a dedicated ARM runner and is a native build already covered
+          # by rust.yml's compilation.
+          - target: x86_64-unknown-linux-gnu
+            cross: false
+          # The musl targets are the real gap: they build inside cross's
+          # container and depend on Cross.toml's per-target libseccomp pre-build.
+          - target: x86_64-unknown-linux-musl
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Install libseccomp (native gnu)
+        # Mirrors release.yml: the native gnu build links the system libseccomp
+        # (umf-engine's libcontainer `libseccomp` feature, #231). The musl
+        # `cross` jobs build libseccomp inside the container instead (Cross.toml).
+        if: ${{ !matrix.cross }}
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Own cache slot per target, separate from release.yml's slots.
+          key: release-validate-${{ matrix.target }}
+
+      - name: Build umf (cargo, native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin umf
+
+      - name: Build umf (cross, musl)
+        # Same env as release.yml: Cross.toml's pre-build compiles a static musl
+        # libseccomp into /usr/local; these vars link it. `libseccomp-sys` is
+        # env-driven, and the `libseccomp` crate's pkg-config probe needs
+        # PKG_CONFIG_ALLOW_CROSS for a cross target. Cross.toml's `passthrough`
+        # forwards them into the build container.
+        if: matrix.cross
+        env:
+          LIBSECCOMP_LINK_TYPE: static
+          LIBSECCOMP_LIB_PATH: /usr/local/lib
+          PKG_CONFIG_ALLOW_CROSS: "1"
+        run: cross build --release --locked --target ${{ matrix.target }} --bin umf

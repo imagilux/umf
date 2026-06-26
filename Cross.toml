@@ -1,0 +1,73 @@
+# cross (cross-rs) configuration for the musl release builds.
+#
+# Why this file exists
+# --------------------
+# umf-engine builds youki's `libcontainer` with its `libseccomp` feature on
+# (#231): the runtime links the system libseccomp C library so it can apply
+# our default-deny seccomp profile to every RUN step. That turns libseccomp
+# into a *build-time* dependency (`libseccomp.{a,so}` + headers + the
+# `libseccomp.pc` pkg-config file).
+#
+# release.yml builds four targets: the two `-gnu` ones compile natively on the
+# runner (the workflow `apt-get install`s `libseccomp-dev` there), while the
+# two `-musl` ones build inside cross's container images. Those images carry a
+# musl cross-toolchain but no musl build of libseccomp, so we provide one here.
+#
+# What the pre-build does
+# -----------------------
+# Each musl target's `pre-build` runs as a Docker `RUN` inside the (Ubuntu-based)
+# cross image. It:
+#   1. installs `gperf` (libseccomp's build needs it; the image lacks it),
+#   2. uses the musl toolchain host triple `<arch>-linux-musl` (hardcoded per
+#      target below: `x86_64-linux-musl` / `aarch64-linux-musl`). The cross
+#      images name their compiler `<arch>-linux-musl-gcc` and root its sysroot
+#      at `/usr/local/<arch>-linux-musl`. It is hardcoded rather than derived
+#      from `$CROSS_TARGET` because cross does not reliably export that variable
+#      into the pre-build shell, and reading it under `set -u` aborted the
+#      build right after the gperf install.
+#   3. builds libseccomp 2.6.0 from source against that musl compiler as a
+#      *static* archive and installs it at a fixed, arch-independent prefix
+#      (`/usr/local`, libdir `/usr/local/lib`) so a single `LIBSECCOMP_LIB_PATH`
+#      points at it for both musl targets.
+#
+# How the Rust side picks it up
+# -----------------------------
+# The actual linker is the `libseccomp-sys` build script, which is purely
+# env-driven (it does not use pkg-config):
+#   * `LIBSECCOMP_LINK_TYPE=static` -> emits `rustc-link-lib=static=seccomp`
+#   * `LIBSECCOMP_LIB_PATH=/usr/local/lib` -> adds that `rustc-link-search`
+# The higher-level `libseccomp` crate's build script additionally probes
+# libseccomp via pkg-config (only to set an optional `>= 2.6.0` cfg); it reads
+# `LIBSECCOMP_LIB_PATH` to point `PKG_CONFIG_PATH` at `<path>/pkgconfig`, and
+# release.yml exports `PKG_CONFIG_ALLOW_CROSS=1` so that cross probe is allowed.
+# release.yml sets all three vars and lists them under `passthrough` so cross
+# forwards them from the runner into the build container.
+#
+# Pinning the source build (rather than fetching a distro package) keeps the
+# musl/static path reproducible and sovereignty-friendly: no musl libseccomp
+# package is needed, only the upstream release tarball.
+
+[build.env]
+# Forward the libseccomp build/link knobs that release.yml sets on the runner
+# into the cross build container. (cross drops unknown host env by default.)
+passthrough = [
+    "LIBSECCOMP_LINK_TYPE",
+    "LIBSECCOMP_LIB_PATH",
+    "PKG_CONFIG_ALLOW_CROSS",
+]
+
+# NOTE: each `pre-build` list entry is emitted as its own Docker `RUN`
+# instruction, so shell variables and the working directory do NOT carry across
+# entries. The whole recipe therefore lives in ONE entry / one shell. The two
+# musl targets run near-identical scripts differing only in the hardcoded
+# `<arch>-linux-musl` host triple.
+
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"x86_64-linux-musl\"; ver=2.6.0; cd /tmp; curl -fsSL \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\" | tar xz; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
+]
+
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"aarch64-linux-musl\"; ver=2.6.0; cd /tmp; curl -fsSL \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\" | tar xz; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
+]

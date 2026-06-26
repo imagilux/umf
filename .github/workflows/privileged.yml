@@ -1,0 +1,105 @@
+name: Privileged smoke
+
+# Exercises the privileged runtime mechanics the default `Rust CI` lane can't:
+#   * rootful libcontainer RUN (overlayfs + CAP_SYS_ADMIN), and
+#   * real NAT'd network egress (veth + nft masquerade).
+# VM boot is validated by the sibling `boot-smoke` lane (#271); together they
+# cover the four riskiest paths called out in #272.
+#
+# These need root, an open netfilter FORWARD chain, and a base image the runner
+# can pull. The engine smokes self-skip on environmental pull failures (rate
+# limit, DNS, refused), so the lane is never red for a transient registry
+# hiccup. `UMF_SMOKE_BASE_IMAGE` points them at a non-Docker-Hub mirror
+# (default: our public GHCR copy of alpine) so a shared runner IP never trips
+# Docker Hub's anonymous pull limit. The smokes pull anonymously, so the base
+# must be a public / anonymously-pullable image; override it only with another
+# such mirror via the `UMF_CI_BASE_IMAGE` repo variable.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # alpine:3.21, mirrored to GHCR as a PUBLIC package so the runner pulls it
+  # anonymously. The engine smokes pull anonymously by construction, so the base
+  # MUST be anonymously pullable; override via the UMF_CI_BASE_IMAGE repo
+  # variable only with another public/anonymous mirror (a private registry would
+  # need test-side auth changes, out of scope here).
+  UMF_SMOKE_BASE_IMAGE: ${{ vars.UMF_CI_BASE_IMAGE || 'ghcr.io/imagilux/umf-ci-base:alpine-3.21' }}
+
+jobs:
+  privileged:
+    name: rootful RUN + NAT egress
+    runs-on: ubuntu-latest
+    # Hard cap: these are root container/VM operations, so a wedged step must
+    # never burn a runner for hours (a hung libcontainer wait did exactly that
+    # before the per-command timeouts + --test-threads=1 below).
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install host deps
+        # libseccomp-dev: links the engine's seccomp filter. nftables: the
+        # masquerade rule. iproute2/iputils-ping/bind9-dnsutils/curl: the
+        # egress example's in-netns probes (ip / ping / nslookup / curl).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev nftables iproute2 iputils-ping curl
+          sudo apt-get install -y bind9-dnsutils || sudo apt-get install -y dnsutils
+
+      - name: Open the FORWARD chain + enable IPv4 forwarding
+        # Docker ships preinstalled on GitHub runners and sets the netfilter
+        # FORWARD policy to DROP, which silently blocks NAT'd container egress
+        # (the exact footgun in docs/troubleshooting.md). Open it for the run.
+        run: |
+          sudo sysctl -w net.ipv4.ip_forward=1
+          sudo iptables -P FORWARD ACCEPT 2>/dev/null || true
+
+      - name: Build test artifacts (as the runner user, cached)
+        run: |
+          cargo test --workspace --no-run --locked
+          cargo build -p umf-networking --example egress_smoke
+
+      - name: Container RUN smokes (rootful libcontainer + overlayfs)
+        # Real root for the overlay mount (CAP_SYS_ADMIN) and the uid 0->0 map.
+        # HOME + PATH are passed through explicitly so cargo-as-root reuses the
+        # runner's toolchain, cache, and already-built target/ (no rebuild).
+        # Self-skips if the base pull fails environmentally.
+        #
+        # `--test-threads=1`: these tests each spin up a real libcontainer
+        # container as root; running them concurrently deadlocked on the
+        # runner's constrained cgroup/mounts (a non-zero-exit container wedged
+        # its waitpid). Serialising removes the contention. The per-command
+        # `timeout` is the backstop so a future wedge fails fast, never hangs.
+        env:
+          UMF_ENGINE_SMOKE: "1"
+        run: |
+          echo "diag: cgroup=$(stat -fc %T /sys/fs/cgroup 2>/dev/null) kernel=$(uname -r)"
+          smoke() {
+            timeout -k 10 420 sudo env "PATH=$PATH" "HOME=$HOME" \
+              "UMF_ENGINE_SMOKE=$UMF_ENGINE_SMOKE" \
+              "UMF_SMOKE_BASE_IMAGE=$UMF_SMOKE_BASE_IMAGE" \
+              cargo test "$@" -- --nocapture --test-threads=1
+          }
+          smoke -p umf-engine --test smoke --test run
+          smoke -p umf-builder --test engine_build_smoke
+
+      - name: NAT'd egress smoke (veth + nft, real outbound)
+        # Proves a container netns reaches the internet through the veth + nft
+        # masquerade and that teardown leaks nothing. ICMP is skipped because
+        # hosted runners can drop raw ICMP to public IPs; DNS (UDP/53) and
+        # HTTPS (TCP/443) remain the hard proof.
+        env:
+          UMF_EGRESS_SKIP_ICMP: "1"
+        run: |
+          timeout -k 10 240 sudo env "PATH=$PATH" "HOME=$HOME" "UMF_EGRESS_SKIP_ICMP=$UMF_EGRESS_SKIP_ICMP" \
+            cargo run -p umf-networking --example egress_smoke

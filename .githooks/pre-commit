@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# UMF pre-commit guard: refuse to commit emails / tokens / keys / other secrets.
+# Enable once per clone with:
+#   git config core.hooksPath .githooks
+#
+# Logic is shared with CI via scripts/scan-secrets.sh. Override a reviewed
+# false positive with `git commit --no-verify`.
+exec "$(git rev-parse --show-toplevel)/.githooks/scan-secrets.sh" --staged

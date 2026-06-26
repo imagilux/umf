@@ -1,0 +1,279 @@
+name: Release
+
+# Builds the `umf` binary for every supported target and publishes a
+# GitHub Release with all artifacts + an SHA256SUMS file. Driven by
+# `vX.Y.Z` tag pushes.
+#
+# Binary releases version independently from the UMF spec they
+# implement — the implementation may evolve (bug fixes, perf work,
+# additional backends) without the spec changing, and vice versa.
+# Spec docs are published by `deploy-docs.yml` on `spec-vX.Y[.Z]`
+# tags, which is a deliberately separate event from binary releases.
+# A given binary release advertises which spec version it implements
+# via the release body below.
+#
+# A `workflow_dispatch` trigger is provided for re-running a release on
+# an existing tag (e.g. after a transient runner failure) without having
+# to delete and re-create the tag itself.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release for (e.g. v0.0.1)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The UMF spec version this binary release implements. Update this
+  # when the implementation tracks a new spec revision — it controls
+  # the "Implements UMF spec" line + docs link in the release notes.
+  # The spec is published independently via `spec-vX.Y[.Z]` tags
+  # (see deploy-docs.yml); this value is the consumer-facing pointer
+  # from a binary release back to the matching spec docs.
+  IMPLEMENTED_SPEC_VERSION: "0.0.1"
+
+permissions:
+  # softprops/action-gh-release needs write access to publish the release.
+  contents: write
+
+jobs:
+  build:
+    name: build / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Don't cancel sibling builds on a single failure — operators want
+      # to see every target's outcome on a release run.
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            cross: false
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+
+    steps:
+      - name: Resolve release tag
+        id: tag
+        # tag_name is the version label used everywhere downstream — for
+        # the artifact filename, the release title, the asset paths.
+        # Tag-push events use github.ref_name; workflow_dispatch uses the
+        # tag input.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.tag.outputs.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Install libseccomp (native gnu)
+        # The native gnu jobs compile the workspace directly on the runner, and
+        # umf-engine builds libcontainer with its `libseccomp` feature on (#231),
+        # which links the system libseccomp C library + headers. The aarch64-gnu
+        # job runs on a native ARM runner, so the runner-arch dev package is the
+        # right one in both cases. (The musl `cross` jobs build libseccomp inside
+        # the container instead; see Cross.toml.)
+        if: ${{ !matrix.cross }}
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache slot per target — gnu and musl produce
+          # different artifacts even on the same host arch.
+          key: ${{ matrix.target }}
+
+      - name: Build umf (cargo)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin umf
+
+      - name: Build umf (cross)
+        # cross builds in a container that handles the cross-compile
+        # toolchain + musl headers + libc bridge — much cleaner than
+        # wrangling musl-gcc and CC env vars by hand.
+        #
+        # Cross.toml's per-target pre-build compiles a static musl libseccomp
+        # into /usr/local inside the container (the image ships no musl build
+        # of it). These env vars tell the build scripts to link that static
+        # archive: `libseccomp-sys` is purely env-driven (LIBSECCOMP_LINK_TYPE
+        # + LIBSECCOMP_LIB_PATH), and the higher-level `libseccomp` crate's
+        # pkg-config probe needs PKG_CONFIG_ALLOW_CROSS for a cross target. They
+        # are listed under Cross.toml `[build.env] passthrough` so cross
+        # forwards them from the runner into the build container.
+        if: matrix.cross
+        env:
+          LIBSECCOMP_LINK_TYPE: static
+          LIBSECCOMP_LIB_PATH: /usr/local/lib
+          PKG_CONFIG_ALLOW_CROSS: "1"
+        run: cross build --release --locked --target ${{ matrix.target }} --bin umf
+
+      - name: Strip binary
+        # Native targets get the host strip; cross containers handled
+        # stripping symbols are still useful, so strip again here. `|| true`
+        # because aarch64-on-x86 native strip will refuse to operate on an
+        # ARM binary — in that case the cross container's strip already
+        # ran and the binary is fine.
+        run: strip "target/${{ matrix.target }}/release/umf" || true
+
+      - name: Package
+        id: package
+        env:
+          TAG: ${{ steps.tag.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Strip the leading 'v' for filename consistency with crate
+          # versioning; tags are 'v0.0.1', package names are '1.0.0'.
+          version="${TAG#v}"
+          stage="umf-${version}-${TARGET}"
+          mkdir -p "$stage"
+          cp "target/${TARGET}/release/umf" "$stage/umf"
+          cp README.md LICENSE "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+          sha256sum "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+          echo "archive=${stage}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "sha=${stage}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        # Each target's archive lands in its own workflow artifact so
+        # the publish job can collect them all without name conflicts.
+        uses: actions/upload-artifact@v7
+        with:
+          name: umf-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.sha }}
+          retention-days: 7
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          # No name filter = download every artifact from this run.
+          path: artifacts
+
+      - name: Stage assets + aggregate SHA256SUMS
+        id: stage
+        env:
+          TAG: ${{ steps.tag.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          # Flatten artifacts/<name>/<file> into assets/<file>, then
+          # collate every individual .sha256 into a single SHA256SUMS
+          # the operator can verify in one shot:
+          #   sha256sum -c SHA256SUMS --ignore-missing
+          find artifacts -type f -name '*.tar.gz' -exec cp {} assets/ \;
+          find artifacts -type f -name '*.sha256' -exec cat {} \; > assets/SHA256SUMS
+          ls -la assets/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: ${{ steps.tag.outputs.tag_name }}
+          # Mark -rc (and any pre-release) tags as a GitHub prerelease so they
+          # never become the "Latest" release that `install.sh` resolves to.
+          prerelease: ${{ contains(steps.tag.outputs.tag_name, '-rc') }}
+          # Create as a DRAFT first. This repo has immutable releases enabled,
+          # which lock assets at publish time, so uploading to an
+          # already-published release fails. A draft stays mutable, so the assets
+          # attach here; the next step flips the completed draft to published.
+          draft: true
+          # Auto-generated commit/PR list lands BELOW the body below.
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            Download the appropriate archive for your platform from the assets below.
+            Extract it and place the `umf` binary somewhere on your `PATH`.
+
+            | Target | Description |
+            | --- | --- |
+            | `x86_64-unknown-linux-gnu` | Linux on x86_64, dynamically linked against glibc (most desktops, servers, CI runners) |
+            | `aarch64-unknown-linux-gnu` | Linux on ARM64, dynamically linked against glibc (AWS Graviton, Raspberry Pi 4+, Apple Silicon under Linux VM) |
+            | `x86_64-unknown-linux-musl` | Linux on x86_64, statically linked against musl (Alpine, distroless, glibc-less environments) |
+            | `aarch64-unknown-linux-musl` | Linux on ARM64, statically linked against musl (Alpine ARM, distroless) |
+
+            ### Verify + install (x86_64 glibc example)
+
+            ```bash
+            VERSION=${{ steps.tag.outputs.tag_name }}
+            TARGET=x86_64-unknown-linux-gnu
+            curl -LO "https://github.com/imagilux/umf/releases/download/${VERSION}/umf-${VERSION#v}-${TARGET}.tar.gz"
+            curl -LO "https://github.com/imagilux/umf/releases/download/${VERSION}/SHA256SUMS"
+            sha256sum -c SHA256SUMS --ignore-missing
+            tar -xzf "umf-${VERSION#v}-${TARGET}.tar.gz"
+            sudo install -m 755 "umf-${VERSION#v}-${TARGET}/umf" /usr/local/bin/umf
+            umf --help
+            ```
+
+            ### Implemented spec version
+
+            This binary implements **UMF spec v${{ env.IMPLEMENTED_SPEC_VERSION }}**.
+
+            Spec and implementation version independently — a binary release does not
+            republish the spec. The spec docs at the version this binary targets:
+            <https://umf.imagilux.org/${{ env.IMPLEMENTED_SPEC_VERSION }}/>
+
+            Always-current spec (may be ahead of what this binary implements):
+            <https://umf.imagilux.org/latest/>
+          files: |
+            assets/*.tar.gz
+            assets/SHA256SUMS
+
+      - name: Publish the draft release
+        # Flip the draft (assets already attached) to published. Publishing now
+        # produces the immutable release WITH its assets. Keep `-rc` tags off
+        # "Latest"; stable tags become Latest so install.sh resolves to them.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag_name }}
+          IS_PRERELEASE: ${{ contains(steps.tag.outputs.tag_name, '-rc') }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            gh release edit "$TAG" --draft=false --latest=false --repo "$GITHUB_REPOSITORY"
+          else
+            gh release edit "$TAG" --draft=false --latest=true --repo "$GITHUB_REPOSITORY"
+          fi

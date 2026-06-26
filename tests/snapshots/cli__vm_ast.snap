@@ -1,0 +1,150 @@
+---
+source: tests/cli.rs
+expression: text
+---
+{
+  "global_args": [],
+  "stages": [
+    {
+      "from": {
+        "source": {
+          "Reference": {
+            "value": "imagilux/kernel-linux:7.0",
+            "span": {
+              "start": 5,
+              "end": 30
+            }
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 30
+        }
+      },
+      "name": null,
+      "directives": [
+        {
+          "Label": {
+            "key": {
+              "value": "org.imagilux.umf.flavor",
+              "span": {
+                "start": 37,
+                "end": 60
+              }
+            },
+            "value": {
+              "value": "systemd-boot",
+              "span": {
+                "start": 61,
+                "end": 73
+              }
+            },
+            "span": {
+              "start": 31,
+              "end": 73
+            }
+          }
+        },
+        {
+          "Add": {
+            "source": {
+              "Oci": {
+                "value": "debian:bookworm",
+                "span": {
+                  "start": 78,
+                  "end": 93
+                }
+              }
+            },
+            "destination": {
+              "value": "/",
+              "span": {
+                "start": 94,
+                "end": 95
+              }
+            },
+            "from": null,
+            "plain_copy": false,
+            "span": {
+              "start": 74,
+              "end": 95
+            }
+          }
+        },
+        {
+          "Entrypoint": {
+            "init": "Systemd",
+            "span": {
+              "start": 96,
+              "end": 114
+            }
+          }
+        },
+        {
+          "Label": {
+            "key": {
+              "value": "org.imagilux.umf.author",
+              "span": {
+                "start": 122,
+                "end": 145
+              }
+            },
+            "value": {
+              "value": "test",
+              "span": {
+                "start": 146,
+                "end": 150
+              }
+            },
+            "span": {
+              "start": 116,
+              "end": 150
+            }
+          }
+        },
+        {
+          "Expose": {
+            "port": 80,
+            "protocol": "Tcp",
+            "span": {
+              "start": 152,
+              "end": 165
+            }
+          }
+        },
+        {
+          "Expose": {
+            "port": 443,
+            "protocol": "Tcp",
+            "span": {
+              "start": 166,
+              "end": 180
+            }
+          }
+        },
+        {
+          "Run": {
+            "command": {
+              "Shell": {
+                "value": "systemctl enable nginx.service",
+                "span": {
+                  "start": 185,
+                  "end": 215
+                }
+              }
+            },
+            "mounts": [],
+            "span": {
+              "start": 181,
+              "end": 215
+            }
+          }
+        }
+      ],
+      "span": {
+        "start": 0,
+        "end": 216
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+FROM imagilux/kernel-linux:7.0
+LABEL org.imagilux.umf.flavor=systemd-boot
+ADD alpine:3.21.0 /
+ENTRYPOINT systemd

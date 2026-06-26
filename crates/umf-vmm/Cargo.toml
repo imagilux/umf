@@ -1,0 +1,25 @@
+[package]
+name = "umf-vmm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF VMM abstraction — VmRuntime trait + per-VMM backends (QEMU, Cloud Hypervisor)"
+
+[dependencies]
+async-trait = { workspace = true }
+cloud-hypervisor-client = { workspace = true }
+# `sched` for setns: launch the cloud-hypervisor child inside the caller's
+# pre-built network namespace (port-forward path) without shelling out to `ip`.
+nix = { workspace = true, features = ["sched"] }
+qapi = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

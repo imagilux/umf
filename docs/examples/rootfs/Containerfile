@@ -1,0 +1,39 @@
+# A neutral, distro-agnostic root filesystem laid out per the
+# Filesystem Hierarchy Standard 3.0:
+#   https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html
+#
+# This is an ordinary CONTAINER build (FROM a base image, not a kernel) on a
+# minimal musl/busybox userland. The output image's filesystem *is* the rootfs
+# that a downstream bootable build consumes via `ADD <ref> /`. "Neutral"
+# = no distro package manager or policy baked in, just the FHS skeleton plus
+# busybox.
+#
+# NB: builds on busybox for its binaries; `FROM scratch` + `ADD <oci-ref> /` is
+# equally supported when you assemble the userland yourself.
+FROM busybox:1.36-musl
+
+# Build out the full FHS 3.0 hierarchy (busybox ships only a partial layout;
+# `mkdir -p` is idempotent). The shell does the work as one logical line —
+# UMF strips `#` comments, so the per-section notes live here, above the RUN:
+#   §3  root top-level dirs    §4  /usr secondary hierarchy    §5  /var
+#   §3.13 private /root        §3.15/§5.15 sticky world-writable temp dirs
+#   §5.13 /var/run + /var/lock are runtime (tmpfs) state → symlinks into /run
+RUN set -eux; \
+    mkdir -p /bin /boot /dev /etc /home /lib /media /mnt /opt /root /run /sbin /srv /sys /tmp /usr /var; \
+    mkdir -p /usr/bin /usr/include /usr/lib /usr/libexec /usr/sbin /usr/share /usr/local/bin /usr/local/lib /usr/local/sbin /usr/local/share; \
+    mkdir -p /var/cache /var/lib /var/local /var/log /var/opt /var/spool /var/tmp; \
+    chmod 1777 /tmp /var/tmp; \
+    chmod 0700 /root; \
+    mkdir -p /run/lock; \
+    rm -rf /var/run /var/lock; \
+    ln -s /run /var/run; \
+    ln -s /run/lock /var/lock; \
+    printf 'root:x:0:0:root:/root:/bin/sh\n' > /etc/passwd; \
+    printf 'root:x:0:\n' > /etc/group; \
+    printf 'neutral-fhs\n' > /etc/hostname
+
+# Mark the artifact a rootfs so a bootable build can consume it with
+# `ADD <ref> /`.
+LABEL org.imagilux.umf.type=rootfs
+LABEL org.imagilux.umf.rootfs.flavor=busybox-fhs
+LABEL org.imagilux.umf.rootfs.standard="FHS-3.0"

@@ -1,0 +1,36 @@
+[package]
+name = "umf-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF-native container build engine — OCI bundle preparation + RUN-step execution backed by youki/libcontainer."
+
+[dependencies]
+umf-core = { workspace = true }
+umf-oci = { workspace = true }
+umf-networking = { workspace = true }
+flate2 = { workspace = true }
+libcontainer = { workspace = true }
+nix = { workspace = true }
+oci-client = { workspace = true }
+oci-spec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# Test-only: synthesize a `+zstd` layer to confirm the consume gate accepts it
+# and the (umf-oci) materialize path decodes it. The engine never compresses;
+# runtime decode is delegated to `umf_oci::materialize::apply_layer`.
+zstd = { workspace = true }
+
+[lints]
+workspace = true

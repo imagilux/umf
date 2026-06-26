@@ -1,0 +1,44 @@
+[package]
+name = "umf-builder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "UMF recipe AST → OCI artifacts (container + bootable-OS images)."
+
+[dependencies]
+umf-core = { workspace = true }
+umf-oci = { workspace = true }
+umf-engine = { workspace = true }
+umf-vmm = { workspace = true }
+bytes = { workspace = true }
+flate2 = { workspace = true }
+reqwest = { workspace = true }
+hex = { workspace = true }
+oci-client = { workspace = true }
+oci-spec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+# `fatfs` is only used by the disk tests, to read back the projected ESP.
+fatfs = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+umf-parser = { workspace = true }
+# Round-trip tests boot an in-process OCI distribution v2 server
+# instead of `registry:2` via podman — see umf_oci::test_registry.
+umf-oci = { workspace = true, features = ["test-server"] }
+
+[lints]
+workspace = true

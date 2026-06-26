@@ -1,0 +1,52 @@
+name: boot-smoke
+
+# Real QEMU/KVM boot validation (#271): build a bootable image from a minimal
+# Alpine kernel + busybox rootfs fixture, umf compile it to a disk, boot it, and
+# assert a userspace marker on the serial console. GitHub-hosted Linux runners
+# expose /dev/kvm, so this runs hardware-accelerated. No path filter (so the
+# required-check never silently goes missing on an unrelated PR).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  UMF_BOOT_SMOKE: "1"
+
+jobs:
+  boot-smoke:
+    name: build / compile / qemu-boot
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Enable /dev/kvm for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install boot toolchain
+        # qemu + OVMF (UEFI firmware) + ukify (UKI assembly) + systemd-boot-efi
+        # (ships /usr/lib/systemd/boot/efi/linuxx64.efi.stub, which ukify links
+        # into the UKI) + libseccomp-dev (the umf binary links libseccomp since
+        # the seccomp hardening). docker is preinstalled on the runner and
+        # builds the kernel/rootfs fixture.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf systemd-ukify systemd-boot-efi libseccomp-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Boot-smoke (build -> compile -> QEMU/KVM boot -> assert userspace)
+        run: cargo test --release --test boot_smoke -- --nocapture

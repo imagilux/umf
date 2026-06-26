@@ -1,0 +1,96 @@
+---
+source: tests/cli.rs
+expression: text
+---
+{
+  "global_args": [],
+  "stages": [
+    {
+      "from": {
+        "source": {
+          "Reference": {
+            "value": "alpine:3.21",
+            "span": {
+              "start": 5,
+              "end": 16
+            }
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 16
+        }
+      },
+      "name": null,
+      "directives": [
+        {
+          "Entrypoint": {
+            "init": "None",
+            "span": {
+              "start": 17,
+              "end": 32
+            }
+          }
+        },
+        {
+          "Run": {
+            "command": {
+              "Shell": {
+                "value": "apk add --no-cache nginx",
+                "span": {
+                  "start": 37,
+                  "end": 61
+                }
+              }
+            },
+            "mounts": [],
+            "span": {
+              "start": 33,
+              "end": 61
+            }
+          }
+        },
+        {
+          "Add": {
+            "source": {
+              "Path": {
+                "value": "nginx.conf",
+                "span": {
+                  "start": 66,
+                  "end": 76
+                }
+              }
+            },
+            "destination": {
+              "value": "/etc/nginx/nginx.conf",
+              "span": {
+                "start": 77,
+                "end": 98
+              }
+            },
+            "from": null,
+            "plain_copy": false,
+            "span": {
+              "start": 62,
+              "end": 98
+            }
+          }
+        },
+        {
+          "Expose": {
+            "port": 80,
+            "protocol": "Tcp",
+            "span": {
+              "start": 99,
+              "end": 112
+            }
+          }
+        }
+      ],
+      "span": {
+        "start": 0,
+        "end": 113
+      }
+    }
+  ]
+}

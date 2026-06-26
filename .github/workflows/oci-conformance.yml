@@ -1,0 +1,55 @@
+name: OCI Conformance
+
+# Measured OCI image-spec conformance gate (OCI-1).
+#
+# Runs `cargo test -p umf-oci --test conformance_image_spec`, which:
+#   1. validates every emitted manifest / config / index against the vendored
+#      OCI image-spec JSON schemas (always-on, no network, no host tools), and
+#   2. round-trips a real emitted layout through `skopeo copy oci:→dir:`
+#      (gated on skopeo being present — installed below, so it runs here).
+#
+# No path filter: like rust.yml, this is wired as a required status check, and a
+# `paths:` filter on a required check silently blocks merges of PRs that don't
+# touch the filtered paths (the check never reports). Cached deps keep the run
+# cheap.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conformance:
+    name: image-spec schemas + skopeo round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        # rust-toolchain.toml pins the channel + components.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install libseccomp
+        # The workspace links the system libseccomp C library (umf-engine's
+        # libcontainer `libseccomp` feature, #231). Building umf-oci's test
+        # target compiles workspace dev-deps, so install the headers first —
+        # same prerequisite as rust.yml.
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+
+      - name: Install skopeo
+        # Enables the gated round-trip (`skopeo copy oci:<layout>:<tag> dir:…`)
+        # in conformance_image_spec.rs. Without it the round-trip test skips
+        # cleanly and only the JSON-schema validation runs.
+        run: sudo apt-get install -y skopeo
+
+      - name: cargo test -p umf-oci --test conformance_image_spec
+        run: cargo test -p umf-oci --test conformance_image_spec

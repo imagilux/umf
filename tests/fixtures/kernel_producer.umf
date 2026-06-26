@@ -1,0 +1,7 @@
+FROM imagilux/kernel-build-env:1.0
+ADD ./config/default /.config
+RUN /usr/local/bin/build-linux 7.0
+
+LABEL org.imagilux.umf.type=kernel
+LABEL org.imagilux.umf.kernel.release="7.0"
+LABEL org.imagilux.umf.kernel.config=default

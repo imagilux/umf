@@ -1,0 +1,10 @@
+FROM imagilux/kernel-linux:7.0
+LABEL org.imagilux.umf.flavor=systemd-boot
+ADD debian:bookworm /
+ENTRYPOINT systemd
+
+LABEL org.imagilux.umf.author=test
+
+EXPOSE 80/tcp
+EXPOSE 443/tcp
+RUN systemctl enable nginx.service

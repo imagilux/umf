@@ -1,0 +1,202 @@
+[package]
+name = "umf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Universal Machine Format reference CLI"
+readme = "README.md"
+
+[[bin]]
+name = "umf"
+path = "src/main.rs"
+
+[dependencies]
+umf-core = { workspace = true, features = ["serde"] }
+umf-parser = { workspace = true }
+umf-oci = { workspace = true }
+umf-engine = { workspace = true }
+umf-vmm = { workspace = true }
+umf-networking = { workspace = true }
+umf-builder = { workspace = true }
+umf-compile = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+oci-client = { workspace = true }
+# `umf sbom` (and the coming `sign` / `attest`) assemble OCI artifact blobs;
+# `ArtifactBlob.data` is a `bytes::Bytes`.
+bytes = { workspace = true }
+# Cosign-style signing for `umf sign` (ECDSA P-256 + ed25519, base64 signature).
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+p256 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `umf bench` needs a tempdir for its per-bench layout, parallel to
+# `umf build`'s tempdir usage.
+tempfile = { workspace = true }
+# Read the modern sqlite rpmdb (`/var/lib/rpm/rpmdb.sqlite`) for
+# `umf sbom generate`. `bundled` vendors sqlite, so no system libsqlite3 is
+# needed (air-gapped / sovereignty-first).
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+insta = { workspace = true }
+oci-client = { workspace = true }
+predicates = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+# Used by `tests/cli.rs` to stage fake OCI artifacts under a temp layout
+# (seeding kernel / rootfs images so offline bootable builds resolve `FROM` /
+# `ADD <oci-ref>` from the cache) and exercise dispatch-mismatch rejections.
+umf-core = { workspace = true }
+umf-oci = { workspace = true }
+
+[lints]
+workspace = true
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Gaël THEROND <contact@bitswalk.com>"]
+homepage = "https://umf.imagilux.org/"
+repository = "https://github.com/imagilux/umf"
+
+[workspace.dependencies]
+umf-core = { path = "crates/umf-core", version = "0.0.1" }
+umf-parser = { path = "crates/umf-parser", version = "0.0.1" }
+umf-oci = { path = "crates/umf-oci", version = "0.0.1" }
+umf-engine = { path = "crates/umf-engine", version = "0.0.1" }
+umf-vmm = { path = "crates/umf-vmm", version = "0.0.1" }
+umf-networking = { path = "crates/umf-networking", version = "0.0.1" }
+umf-builder = { path = "crates/umf-builder", version = "0.0.1" }
+umf-compile = { path = "crates/umf-compile", version = "0.0.1" }
+ariadne = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+clap = "4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# Small TOML config (the `umf registry` search-list at registries.toml).
+toml = "0.8"
+# Registry client + runtime — used by umf-oci.
+oci-client = { version = "0.16", default-features = false, features = ["rustls-tls"] }
+# youki's libcontainer + OCI runtime-spec types — used by umf-engine.
+# Pin to 0.6: 0.6.0 (Feb 2026) carried breaking changes from 0.5.x, so re-test
+# on every minor bump. The `libseccomp` feature is on (#231): it links the
+# system `libseccomp` C library so the runtime applies our vendored default
+# seccomp profile (containerd/Docker allowlist, default-deny) to every RUN
+# step. Building therefore needs `libseccomp-dev` headers present (CI installs
+# it; see docs/quickstart.md and docs/architecture.md build prerequisites).
+libcontainer = { version = "0.6", default-features = false, features = ["systemd", "v1", "v2", "libseccomp"] }
+# `runtime` supplies the runtime-spec bundle types (umf-engine); `image`
+# supplies the image-spec `Arch` / `Os` enums used to populate / select
+# image-index `platform` descriptors (umf-oci, umf-builder, umf-engine).
+oci-spec = { version = "0.9", features = ["runtime", "image"] }
+# Safe wrappers over libc — used by umf-engine to query the current uid/gid
+# for rootless mapping defaults. Avoids an unsafe-extern block.
+nix = { version = "0.29", default-features = false, features = ["user", "mount", "process"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync"] }
+# Container build/run networking — used by `umf-networking` to give each RUN
+# step's isolated net namespace NAT'd egress. `rtnetlink` (pure-Rust) configures
+# the veth pair, addresses and routes in-process over NETLINK_ROUTE — no `ip`
+# shell-out. The host-side NAT masquerade rule is applied via the `nft` binary
+# (allowed by the subprocess guardrail, same as `ip`): the only pure-Rust
+# option, `rustables` 0.8.7, aborts the process on send (double-closes its
+# netlink socket under nix >= 0.27, where `socket()` returns an `OwnedFd`), so
+# it is deliberately not used — `nft` also keeps us off the bindgen/libclang C
+# build dep. UMF already generates nftables rule text for EXPOSE.
+rtnetlink = "0.14"
+futures = "0.3"
+# Rootless RUN-step egress (#387): a userspace TCP/IP stack driven over the
+# container's tap fd. `smoltcp`'s `any_ip` (transparent-gateway) mode lets the
+# in-process gateway terminate connections to arbitrary destinations and
+# re-originate them from ordinary host sockets — the only unprivileged way
+# across the userns→host boundary (no veth/nft, which need real root). `std`
+# for the host-socket proxy + `OwnedFd` device; no_std-only features stay off.
+smoltcp = { version = "0.13", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "std"] }
+bytes = "1"
+flate2 = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# zstd layer compression — the `+zstd` OCI image-layer media type (OCI-2).
+# `default-features = false` keeps the bundled libzstd C build off the
+# multithreading + zdict surface we don't use; gzip stays the default codec.
+zstd = { version = "0.13", default-features = false }
+http = "1"
+# Standard-alphabet base64 — decodes the `auth` field of
+# `~/.docker/config.json` in umf-oci's registry-auth resolver.
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+# Pure-Rust signing for `umf sign` (cosign-style signatures), no OpenSSL.
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+tar = "0.4"
+tempfile = "3"
+# VM target — GPT partition tables + FAT32 filesystem, pure-Rust so the
+# builder does not require host-side `sgdisk` / `mkfs.fat` utilities.
+gpt = "4"
+fatfs = "0.3"
+# ROOTFS partition: squashfs writer. No pure-Rust ext4 writer exists yet,
+# and shell-out to mkfs.ext4 deviates from the sovereignty pattern. Squashfs
+# is mainstream for immutable rootfs images, well-supported by every Linux
+# kernel, and `backhand` is the canonical pure-Rust read/write library.
+backhand = { version = "0.25", default-features = false, features = ["gzip", "xz"] }
+# Recursive directory walking for the squashfs packer (preserves sort order
+# and handles symlinks without resolving them).
+walkdir = "2"
+# Async-trait so the `VmRuntime` trait can carry async methods (the QMP
+# control loop in `umf-vmm` is built on top of tokio's QmpStreamTokio).
+async-trait = "0.1"
+# QEMU control via QMP — used by `umf-vmm`'s qemu backend. The crate
+# tracks upstream QEMU's QAPI JSON schema (types are codegen'd), so
+# device-hotplug / status-query / shutdown surfaces stay in sync.
+qapi = { version = "0.15", features = ["qmp", "async-tokio-all"] }
+# Cloud Hypervisor control via the OpenAPI REST socket — used by
+# `umf-vmm`'s cloud_hypervisor backend. Auto-generated from the
+# upstream OpenAPI YAML; if its release cadence slips behind upstream
+# we can regenerate locally via `scripts/regen-ch-client.sh`
+# without changing the public dep.
+cloud-hypervisor-client = "0.6"
+# In-process OCI distribution test registry — used by `umf-oci`'s
+# `test-server` feature to spin up a tiny v2 registry inside the
+# test binary, replacing the podman + `registry:2` round-trip tests.
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }
+# Dev-only — CLI integration tests + builder integration tests.
+assert_cmd = "2"
+insta = { version = "1", features = ["json"] }
+predicates = "3"
+# Dev-only — OCI image-spec JSON-schema conformance gate (OCI-1). Validates
+# every emitted manifest / config / index against the vendored draft-04
+# schemas in `crates/umf-oci/tests/fixtures/schemas/`. Used by umf-oci tests.
+jsonschema = { version = "0.46", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

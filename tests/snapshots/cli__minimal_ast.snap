@@ -1,0 +1,24 @@
+---
+source: tests/cli.rs
+expression: text
+---
+{
+  "global_args": [],
+  "stages": [
+    {
+      "from": {
+        "source": "Scratch",
+        "span": {
+          "start": 0,
+          "end": 12
+        }
+      },
+      "name": null,
+      "directives": [],
+      "span": {
+        "start": 0,
+        "end": 13
+      }
+    }
+  ]
+}

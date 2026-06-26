@@ -1,0 +1,149 @@
+name: Rootless smoke
+
+# Exercises the rootless (non-root) container build path the other lanes don't:
+# `umf build` enters one user namespace (single-id map), mounts the rootfs
+# overlay with the in-process kernel driver inside it, and places each RUN step
+# in a systemd-delegated cgroup scope over the user session bus (#376, #380).
+# It also exercises RUN-step network egress (#387/#388/#389): the native
+# in-process gateway is the default and must give real DNS + HTTP egress; the
+# SSRF default-deny must block host-internal (RFC1918 / cloud-metadata) targets
+# unless re-allowed with `--rootless-net-allow`; and the `pasta` opt-in works.
+#
+# A bare runner lacks two prerequisites, set up below:
+#   * unprivileged user namespaces (Ubuntu 24.04 restricts them via AppArmor), and
+#   * a systemd *user* session with cgroup v2 delegation (rootless cgroup
+#     placement is delegated to the user's systemd over its session bus).
+# The base image is pulled anonymously from our public GHCR mirror, like the
+# privileged lane. The build itself runs as the unprivileged runner user — it
+# never uses sudo, which is the whole point of the lane.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # alpine, mirrored to GHCR as a PUBLIC package so the runner pulls it
+  # anonymously (same source as the privileged lane). Override only with another
+  # public/anonymous mirror via the UMF_CI_BASE_IMAGE repo variable.
+  UMF_SMOKE_BASE_IMAGE: ${{ vars.UMF_CI_BASE_IMAGE || 'ghcr.io/imagilux/umf-ci-base:alpine-3.21' }}
+
+jobs:
+  rootless:
+    name: rootless build (userns + delegated cgroups)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev
+
+      - name: Permit unprivileged user namespaces
+        # Ubuntu 24.04 runners restrict unprivileged userns via AppArmor; the
+        # umf binary carries no profile here, so relax the policy for the run.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sysctl user.max_user_namespaces
+
+      - name: Bring up a systemd user session (cgroup v2 delegation)
+        # Rootless cgroup placement is delegated to the user's systemd over its
+        # session bus. `enable-linger` starts a lingering user@UID manager and
+        # its /run/user/UID/bus; surface both to later steps and wait for the
+        # socket so youki's systemd cgroup manager can reach it.
+        run: |
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$(id -un)"
+          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do [ -S "/run/user/${uid}/bus" ] && break; sleep 1; done
+          test -S "/run/user/${uid}/bus" || { echo "::error::no systemd user session bus at /run/user/${uid}/bus"; exit 1; }
+          XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user show "user@${uid}.service" -p Delegate || true
+
+      - name: Build umf
+        run: cargo build -p umf --locked
+
+      - name: Diagnostics
+        run: |
+          test "$(id -u)" -ne 0   # prove the lane runs unprivileged
+          echo "uid=$(id -u) kernel=$(uname -r) cgroupfs=$(stat -fc %T /sys/fs/cgroup)"
+          ./target/debug/umf doctor || true
+
+      - name: Rootless build (#376 reproducer, two RUN steps)
+        # No sudo: the whole build runs as the unprivileged runner user, enters
+        # its own user namespace, and must succeed end to end. Two RUN steps
+        # prove per-step systemd cgroup scopes don't collide and that a layer
+        # written by the first step is visible to the second.
+        run: |
+          set -euo pipefail
+          mkdir -p fixture
+          printf 'FROM %s\nRUN echo hi > /a\nRUN cat /a\n' "$UMF_SMOKE_BASE_IMAGE" > fixture/Containerfile
+          cat fixture/Containerfile
+          ./target/debug/umf build --tag umf-rootless:ci ./fixture 2>&1 | tee build.log
+          grep -q 'Built umf-rootless:ci' build.log
+
+      - name: Install passt (for the pasta egress backend)
+        run: sudo apt-get install -y passt
+
+      - name: Native egress is the default — DNS + HTTP through the in-process gateway
+        # No --rootless-net flag: native is the default backend (#389). The RUN
+        # steps resolve a name and fetch over HTTP, so real outbound egress must
+        # work with no external binary. Each egress step below prefixes its RUNs
+        # with a step-unique `echo` marker: the layer cache keys on the RUN
+        # command, so without distinct markers a later step (e.g. pasta) would
+        # reuse this step's cached layer and never actually execute under its own
+        # backend, silently passing.
+        run: |
+          set -euo pipefail
+          mkdir -p egress-native
+          printf 'FROM %s\nRUN echo native-egress-dns; (nslookup example.com >/dev/null 2>&1 && echo DNS_OK || { echo DNS_FAIL; exit 1; })\nRUN echo native-egress-http; (wget -T 15 -qO /dev/null http://example.com && echo HTTP_OK || { echo HTTP_FAIL; exit 1; })\n' "$UMF_SMOKE_BASE_IMAGE" > egress-native/Containerfile
+          ./target/debug/umf build --tag umf-egress-native:ci ./egress-native 2>&1 | tee native.log
+          grep -q DNS_OK native.log
+          grep -q HTTP_OK native.log
+
+      - name: SSRF default-deny blocks host-internal egress
+        # A RUN dialing an RFC1918 host and the cloud-metadata IP must be refused
+        # by the gateway's connect-time SSRF check (default deny-all), so neither
+        # is ever contacted. `|| true` keeps the RUN (hence the build) succeeding
+        # so we can assert on the gateway's denial log.
+        run: |
+          set -euo pipefail
+          mkdir -p ssrf-deny
+          printf 'FROM %s\nRUN echo ssrf-deny-rfc1918; wget -T 4 -qO /dev/null http://10.255.255.1/ || true\nRUN echo ssrf-deny-meta; wget -T 4 -qO /dev/null http://169.254.169.254/ || true\n' "$UMF_SMOKE_BASE_IMAGE" > ssrf-deny/Containerfile
+          RUST_LOG=umf_networking=debug ./target/debug/umf build --tag umf-ssrf-deny:ci ./ssrf-deny 2>&1 | tee ssrf.log
+          grep -q 'denied: rfc1918' ssrf.log
+          grep -q 'denied: link-local' ssrf.log
+
+      - name: SSRF --rootless-net-allow re-allows a category
+        # With rfc1918 re-allowed, the gateway must NOT refuse the RFC1918 dst on
+        # policy grounds (it attempts the connect, which merely times out on the
+        # dead IP). The absence of an rfc1918 denial proves the override plumbs.
+        run: |
+          set -euo pipefail
+          mkdir -p ssrf-allow
+          printf 'FROM %s\nRUN echo ssrf-allow-rfc1918; wget -T 4 -qO /dev/null http://10.255.255.1/ || true\n' "$UMF_SMOKE_BASE_IMAGE" > ssrf-allow/Containerfile
+          RUST_LOG=umf_networking=debug ./target/debug/umf build --rootless-net-allow rfc1918 --tag umf-ssrf-allow:ci ./ssrf-allow 2>&1 | tee allow.log
+          if grep -q 'denied: rfc1918' allow.log; then
+            echo "::error::rfc1918 was denied despite --rootless-net-allow rfc1918"; exit 1
+          fi
+
+      - name: Pasta egress backend (opt-in) — DNS + HTTP
+        # The external-helper backend selected explicitly. Same egress assertion
+        # as native, proving --rootless-net pasta plumbs end to end.
+        run: |
+          set -euo pipefail
+          mkdir -p egress-pasta
+          printf 'FROM %s\nRUN echo pasta-egress-dns; (nslookup example.com >/dev/null 2>&1 && echo DNS_OK || { echo DNS_FAIL; exit 1; })\nRUN echo pasta-egress-http; (wget -T 15 -qO /dev/null http://example.com && echo HTTP_OK || { echo HTTP_FAIL; exit 1; })\n' "$UMF_SMOKE_BASE_IMAGE" > egress-pasta/Containerfile
+          ./target/debug/umf build --rootless-net pasta --tag umf-egress-pasta:ci ./egress-pasta 2>&1 | tee pasta.log
+          grep -q DNS_OK pasta.log
+          grep -q HTTP_OK pasta.log

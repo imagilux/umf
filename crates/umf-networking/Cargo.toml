@@ -1,0 +1,35 @@
+[package]
+name = "umf-networking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Per-container NAT'd networking for UMF build/run net namespaces (pure-Rust veth over netlink + nftables masquerade)"
+
+[dependencies]
+rtnetlink = { workspace = true }
+futures = { workspace = true }
+# `sched` for unshare/setns: create + configure the per-VM net namespace, and
+# configure the container side of the veth from inside its namespace. `signal`
+# for SIGTERM to the detached pasta egress daemon on teardown. `nix::libc`
+# (always re-exported) carries the TUN ioctl surface for tap creation and the
+# `poll`/`read`/`write` raw-fd plumbing the rootless native gateway's event loop
+# uses.
+nix = { workspace = true, features = ["sched", "signal"] }
+# Rootless RUN-step native egress (#387): userspace TCP/IP stack over the tap
+# fd, in `any_ip` transparent-gateway mode. See the workspace dep note.
+smoltcp = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# `user` (a workspace default) for `Uid::current().is_root()` — gates the
+# root-only native VM-net integration smoke.
+nix = { workspace = true }
+
+[lints]
+workspace = true

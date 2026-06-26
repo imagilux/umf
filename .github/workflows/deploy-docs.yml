@@ -1,0 +1,150 @@
+name: Deploy docs
+
+# Releases the MkDocs site via mike on spec tag pushes. The tag name
+# (with the 'spec-v' prefix stripped) becomes the published mike
+# version slot, and the 'latest' alias is repointed to it.
+#
+# The 'spec-v' prefix exists to decouple spec releases from binary
+# releases: the implementation now versions independently from the
+# spec it implements (binary v0.0.1 implements spec v0.0.1, future
+# binary tags like v0.0.1 must NOT republish the docs). `release.yml`
+# fires on bare `vX.Y.Z`; this workflow fires on `spec-vX.Y[.Z]`.
+#
+# Legacy v0.1 / v0.2 / v0.3 / v0.3.1 tags predate the split and stay
+# published as-is. Future spec revisions should use the new prefix.
+#
+# main is a continuous-development branch — pushes to main do NOT publish.
+# Cut a `spec-vX.Y` or `spec-vX.Y.Z` tag to release.
+#
+# Manual escape hatch: workflow_dispatch lets you re-publish an existing
+# version, backport a patch under its own alias, or publish off-schedule.
+
+on:
+  push:
+    tags:
+      - 'spec-v[0-9]+.[0-9]+'         # spec-vX.Y      — minor spec releases
+      - 'spec-v[0-9]+.[0-9]+.[0-9]+'  # spec-vX.Y.Z    — patch spec releases
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1, 0.2.1)"
+        required: true
+      alias:
+        description: "Alias to attach (e.g. latest, dev) — leave empty for none"
+        default: "latest"
+        required: false
+
+permissions:
+  # mike pushes the rendered site to the gh-pages branch
+  contents: write
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # mike reads/writes the gh-pages branch history; full clone required
+          fetch-depth: 0
+
+      - name: Set up uv
+        # Pinned to immutable tag — astral-sh stopped publishing floating
+        # major/minor tags from v8.0.0 onward (security: tj-actions-style
+        # supply-chain attacks). Bump deliberately when a new release lands.
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Configure git author for gh-pages commits
+        # github-actions[bot] is the canonical identity for workflow-driven
+        # commits; the noreply email matches the bot user id.
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve version + alias
+        id: meta
+        # Tag pushes derive version from the ref (strip refs/tags/ and
+        # the 'spec-v' prefix); workflow_dispatch passes them in directly.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            ALIAS="${{ github.event.inputs.alias }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#spec-v}"
+            ALIAS="latest"
+          fi
+          echo "Resolved: version=$VERSION alias=${ALIAS:-<none>}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "alias=$ALIAS"     >> "$GITHUB_OUTPUT"
+
+      - name: Deploy with mike
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          ALIAS:   ${{ steps.meta.outputs.alias }}
+        run: |
+          if [ -n "$ALIAS" ]; then
+            uv run mike deploy --push --update-aliases "$VERSION" "$ALIAS"
+          else
+            uv run mike deploy --push "$VERSION"
+          fi
+
+      - name: Post status to UMF - Release v1 project
+        # Records a "CI - Docs: passed/failed" entry on the GitHub Project so
+        # the roadmap board carries a per-release health log. Skips silently
+        # if PROJECT_PAT isn't set.
+        #
+        # Gated behind the ENABLE_PROJECT_SYNC repo variable so this
+        # org-specific board wiring (board id + PAT) stays opt-in and the
+        # public workflow carries no private-infra coupling: forks and
+        # repos without the variable set simply skip the step (#291).
+        #
+        # Requires a repo secret PROJECT_PAT — a Personal Access Token (classic
+        # with `project` scope, or fine-grained with `Projects: read and write`
+        # on the imagilux org) so we can write to the org-scoped Projects v2
+        # board (GITHUB_TOKEN can't, by design).
+        if: always() && vars.ENABLE_PROJECT_SYNC == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+          PROJECT_ID: PVT_kwDODchEp84BX-ap
+          PIPELINE_NAME: "CI - Docs"
+          JOB_STATUS: ${{ job.status }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "PROJECT_PAT secret is not set; skipping project status update."
+            exit 0
+          fi
+          if [ "${JOB_STATUS}" = "success" ]; then
+            STATUS_ENUM=ON_TRACK
+            STATUS_LABEL=passed
+          else
+            STATUS_ENUM=AT_RISK
+            STATUS_LABEL=failed
+          fi
+          BODY=$(printf '**%s**: %s\n\nVersion: v%s\nWorkflow run: %s\n' \
+            "${PIPELINE_NAME}" "${STATUS_LABEL}" "${VERSION}" "${RUN_URL}")
+          gh api graphql \
+            -f projectId="${PROJECT_ID}" \
+            -f status="${STATUS_ENUM}" \
+            -f body="${BODY}" \
+            -f query='mutation($projectId: ID!, $body: String!, $status: ProjectV2StatusUpdateStatus!) {
+              createProjectV2StatusUpdate(input: {
+                projectId: $projectId
+                body: $body
+                status: $status
+              }) {
+                statusUpdate { id status }
+              }
+            }'
