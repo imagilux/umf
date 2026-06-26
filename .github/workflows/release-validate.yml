@@ -3,9 +3,9 @@ name: Release Validate
 # PR-time validation of the release BUILD path — the parts of `release.yml` +
 # `Cross.toml` that otherwise run ONLY on a tag push, where a bug surfaces on a
 # published (immutable) tag instead of on a PR. An early release-candidate cut hit two such
-# bugs back-to-back, neither catchable on a PR before this lane existed (#310):
-#   1. the musl cross pre-build aborting under `set -u` (Cross.toml; fixed #308),
-#   2. the immutable-release publish flow (release.yml; fixed #309).
+# bugs back-to-back, neither catchable on a PR before this lane existed:
+#   1. the musl cross pre-build aborting under `set -u` (Cross.toml),
+#   2. the immutable-release publish flow (release.yml).
 #
 # This lane cross-builds the musl targets (exercising `Cross.toml`'s libseccomp
 # static pre-build + link) and one gnu release build, with the same `--release
@@ -17,7 +17,7 @@ name: Release Validate
 # Path-filtered to the release-relevant files so it runs only when they change
 # (keeps cost sane). It is deliberately NOT wired as a required status check: a
 # path filter on a required check silently merge-blocks PRs that don't touch the
-# filtered paths (the #291 footgun).
+# filtered paths (the path-filter-on-a-required-check footgun).
 
 on:
   pull_request:
@@ -72,7 +72,7 @@ jobs:
 
       - name: Install libseccomp (native gnu)
         # Mirrors release.yml: the native gnu build links the system libseccomp
-        # (umf-engine's libcontainer `libseccomp` feature, #231). The musl
+        # (umf-engine's libcontainer `libseccomp` feature). The musl
         # `cross` jobs build libseccomp inside the container instead (Cross.toml).
         if: ${{ !matrix.cross }}
         run: sudo apt-get update && sudo apt-get install -y libseccomp-dev

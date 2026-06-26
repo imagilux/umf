@@ -1,6 +1,6 @@
 name: boot-smoke
 
-# Real QEMU/KVM boot validation (#271): build a bootable image from a minimal
+# Real QEMU/KVM boot validation: build a bootable image from a minimal
 # Alpine kernel + busybox rootfs fixture, umf compile it to a disk, boot it, and
 # assert a userspace marker on the serial console. GitHub-hosted Linux runners
 # expose /dev/kvm, so this runs hardware-accelerated. No path filter (so the
