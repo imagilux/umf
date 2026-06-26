@@ -71,10 +71,14 @@ jobs:
         id: meta
         # Tag pushes derive version from the ref (strip refs/tags/ and
         # the 'spec-v' prefix); workflow_dispatch passes them in directly.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_ALIAS: ${{ github.event.inputs.alias }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-            ALIAS="${{ github.event.inputs.alias }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            ALIAS="$INPUT_ALIAS"
           else
             TAG="${GITHUB_REF#refs/tags/}"
             VERSION="${TAG#spec-v}"
