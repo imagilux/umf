@@ -39,7 +39,7 @@ jobs:
       - name: Install libseccomp
         # umf-engine builds libcontainer with its `libseccomp` feature on, which
         # links the system libseccomp C library + headers. Install them before
-        # any cargo step that compiles the workspace (#231).
+        # any cargo step that compiles the workspace.
         run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
 
       - name: cargo fmt --check
@@ -50,12 +50,12 @@ jobs:
 
       - name: subprocess guardrail
         # Enforces the "no scattered Command::new for container runtimes
-        # / VMM binaries" contract from #101 (Round 7). The script
+        # / VMM binaries" contract. The script
         # passes only when every shell-out to runc/crun/youki/docker/
         # podman is gone, and qemu / cloud-hypervisor spawn calls live
         # only inside their per-backend spawn helper. See the script
         # for the temporary allowlist (round-trip tests scheduled for
-        # removal with #100).
+        # removal).
         run: ./scripts/check-subprocess-calls.sh
 
       - name: cargo test
@@ -82,7 +82,7 @@ jobs:
         # Gated behind the ENABLE_PROJECT_SYNC repo variable so this
         # org-specific board wiring (board id + PAT) stays opt-in and the
         # public workflow carries no private-infra coupling: forks and
-        # repos without the variable set simply skip the step (#291).
+        # repos without the variable set simply skip the step.
         #
         # Only runs on pushes to main — PR runs are too noisy. Skips silently
         # if PROJECT_PAT isn't set (e.g. on a fork) so missing secrets don't

@@ -40,7 +40,7 @@ jobs:
 
       - name: Install libseccomp
         # The workspace links the system libseccomp C library (umf-engine's
-        # libcontainer `libseccomp` feature, #231). Building umf-oci's test
+        # libcontainer `libseccomp` feature). Building umf-oci's test
         # target compiles workspace dev-deps, so install the headers first —
         # same prerequisite as rust.yml.
         run: sudo apt-get update && sudo apt-get install -y libseccomp-dev

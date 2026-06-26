@@ -3,8 +3,8 @@ name: Privileged smoke
 # Exercises the privileged runtime mechanics the default `Rust CI` lane can't:
 #   * rootful libcontainer RUN (overlayfs + CAP_SYS_ADMIN), and
 #   * real NAT'd network egress (veth + nft masquerade).
-# VM boot is validated by the sibling `boot-smoke` lane (#271); together they
-# cover the four riskiest paths called out in #272.
+# VM boot is validated by the sibling `boot-smoke` lane; together they
+# cover the four riskiest paths.
 #
 # These need root, an open netfilter FORWARD chain, and a base image the runner
 # can pull. The engine smokes self-skip on environmental pull failures (rate

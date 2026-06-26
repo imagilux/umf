@@ -5,13 +5,10 @@ name: Deploy docs
 # version slot, and the 'latest' alias is repointed to it.
 #
 # The 'spec-v' prefix exists to decouple spec releases from binary
-# releases: the implementation now versions independently from the
-# spec it implements (binary v0.0.1 implements spec v0.0.1, future
-# binary tags like v0.0.1 must NOT republish the docs). `release.yml`
-# fires on bare `vX.Y.Z`; this workflow fires on `spec-vX.Y[.Z]`.
-#
-# Legacy v0.1 / v0.2 / v0.3 / v0.3.1 tags predate the split and stay
-# published as-is. Future spec revisions should use the new prefix.
+# releases: the implementation versions independently from the spec
+# it implements, so binary tags (`vX.Y.Z`) must NOT republish the
+# docs. `release.yml` fires on bare `vX.Y.Z`; this workflow fires on
+# `spec-vX.Y[.Z]`.
 #
 # main is a continuous-development branch — pushes to main do NOT publish.
 # Cut a `spec-vX.Y` or `spec-vX.Y.Z` tag to release.
@@ -106,7 +103,7 @@ jobs:
         # Gated behind the ENABLE_PROJECT_SYNC repo variable so this
         # org-specific board wiring (board id + PAT) stays opt-in and the
         # public workflow carries no private-infra coupling: forks and
-        # repos without the variable set simply skip the step (#291).
+        # repos without the variable set simply skip the step.
         #
         # Requires a repo secret PROJECT_PAT — a Personal Access Token (classic
         # with `project` scope, or fine-grained with `Projects: read and write`

@@ -96,7 +96,7 @@ jobs:
 
       - name: Install libseccomp (native gnu)
         # The native gnu jobs compile the workspace directly on the runner, and
-        # umf-engine builds libcontainer with its `libseccomp` feature on (#231),
+        # umf-engine builds libcontainer with its `libseccomp` feature on,
         # which links the system libseccomp C library + headers. The aarch64-gnu
         # job runs on a native ARM runner, so the runner-arch dev package is the
         # right one in both cases. (The musl `cross` jobs build libseccomp inside
@@ -151,7 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           # Strip the leading 'v' for filename consistency with crate
-          # versioning; tags are 'v0.0.1', package names are '1.0.0'.
+          # versioning; tags are 'v0.0.1', package names are '0.0.1'.
           version="${TAG#v}"
           stage="umf-${version}-${TARGET}"
           mkdir -p "$stage"

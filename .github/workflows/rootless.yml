@@ -3,8 +3,8 @@ name: Rootless smoke
 # Exercises the rootless (non-root) container build path the other lanes don't:
 # `umf build` enters one user namespace (single-id map), mounts the rootfs
 # overlay with the in-process kernel driver inside it, and places each RUN step
-# in a systemd-delegated cgroup scope over the user session bus (#376, #380).
-# It also exercises RUN-step network egress (#387/#388/#389): the native
+# in a systemd-delegated cgroup scope over the user session bus.
+# It also exercises RUN-step network egress: the native
 # in-process gateway is the default and must give real DNS + HTTP egress; the
 # SSRF default-deny must block host-internal (RFC1918 / cloud-metadata) targets
 # unless re-allowed with `--rootless-net-allow`; and the `pasta` opt-in works.
@@ -79,7 +79,7 @@ jobs:
           echo "uid=$(id -u) kernel=$(uname -r) cgroupfs=$(stat -fc %T /sys/fs/cgroup)"
           ./target/debug/umf doctor || true
 
-      - name: Rootless build (#376 reproducer, two RUN steps)
+      - name: Rootless build (two RUN steps)
         # No sudo: the whole build runs as the unprivileged runner user, enters
         # its own user namespace, and must succeed end to end. Two RUN steps
         # prove per-step systemd cgroup scopes don't collide and that a layer
@@ -96,7 +96,7 @@ jobs:
         run: sudo apt-get install -y passt
 
       - name: Native egress is the default — DNS + HTTP through the in-process gateway
-        # No --rootless-net flag: native is the default backend (#389). The RUN
+        # No --rootless-net flag: native is the default backend. The RUN
         # steps resolve a name and fetch over HTTP, so real outbound egress must
         # work with no external binary. Each egress step below prefixes its RUNs
         # with a step-unique `echo` marker: the layer cache keys on the RUN
