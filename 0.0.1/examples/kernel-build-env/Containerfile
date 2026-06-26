@@ -1,0 +1,29 @@
+# A reusable toolchain image for compiling the Linux kernel — the build
+# environment that the `kernel` example `FROM`s.
+#
+# An ordinary CONTAINER build (FROM a base image, not a kernel): it installs the
+# compiler + kernel build dependencies and labels itself a `kernel-build-env`. It
+# is a normal OCI image, resolved (like every component) through registry → cache
+# → source.
+#
+# Swap the toolchain freely — `clang lld llvm` instead of gcc, a vendor cross
+# compiler, etc. — and retag; downstream kernel builds just `FROM` the variant
+# they want. No new directives required.
+FROM debian:bookworm-slim
+
+# The kernel's documented build prerequisites
+# (Documentation/process/changes.rst): a C toolchain + bc/bison/flex, the
+# libelf and OpenSSL headers, plus git/cpio/kmod/xz for fetching sources and
+# installing modules.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        build-essential bc bison flex \
+        libelf-dev libssl-dev \
+        git cpio kmod xz-utils ca-certificates; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+LABEL org.imagilux.umf.type=kernel-build-env
+LABEL org.imagilux.umf.kernel-build-env.version="1.0"
+LABEL org.imagilux.umf.kernel-build-env.toolchain=gcc

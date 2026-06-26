@@ -1,0 +1,870 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Dockerfile-inspired DSL for building universal bootable artifacts (bare-metal & VM disk images, classic-boot or UKI, and OCI containers)">
+      
+      
+        <meta name="author" content="Gaël THEROND / Imagilux">
+      
+      
+      
+        <link rel="prev" href="../troubleshooting/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Known limitations - UMF — Universal Machine Format</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter+Tight:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter Tight";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/imagilux.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#known-limitations" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="UMF — Universal Machine Format" class="md-header__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            UMF — Universal Machine Format
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Known limitations
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="amber" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="UMF — Universal Machine Format" class="md-nav__button md-logo" aria-label="UMF — Universal Machine Format" data-md-component="logo">
+      
+<img src="../assets/logo-light.svg#only-light" alt="logo">
+<img src="../assets/logo-dark.svg#only-dark" alt="logo">
+    </a>
+    UMF — Universal Machine Format
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../specification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known limitations
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-spec-advertises-more-than-the-implementation-accepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the spec advertises more than the implementation accepts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build inputs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Build inputs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add-url-archive-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ADD &lt;url&gt; archive coverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sbom-package-scanning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SBOM package scanning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootable-build-step-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootable build step ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expose-firewall-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EXPOSE firewall enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rootless-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rootless builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#disk-projection-umf-compile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disk projection (umf compile)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Disk projection (umf compile)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ext4-erofs-root-partition-at-compile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ext4 / erofs root partition at compile
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grub-flavor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        grub flavor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#real-kernel-boot-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Real-kernel boot validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vm-runtime-umf-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VM runtime (umf run)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VM runtime (umf run)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloud-hypervisor-firmware-auto-discovery-and-dhcp-based-port-forwarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud Hypervisor: firmware auto-discovery and DHCP-based port-forwarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#oci-layer-encoding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OCI layer encoding
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="known-limitations">Known limitations<a class="headerlink" href="#known-limitations" title="Permanent link">&para;</a></h1>
+<p>The paths the reference implementation (<code>umf</code> <strong>v0.0.1</strong>) does not yet support, and the cases where the <a href="../specification/">Specification</a> describes something the implementation currently rejects. Each entry is a real, reachable error (not a hypothetical), so you can recognise it and reach for the documented workaround. The DSL is pre-1.0; see <a href="../specification/#stability-versioning">Stability &amp; versioning</a>.</p>
+<p>For the failure messages and fixes, see <a href="../troubleshooting/">Troubleshooting</a>. For host setup, <a href="../prerequisites/">Prerequisites</a>.</p>
+<h2 id="where-the-spec-advertises-more-than-the-implementation-accepts">Where the spec advertises more than the implementation accepts<a class="headerlink" href="#where-the-spec-advertises-more-than-the-implementation-accepts" title="Permanent link">&para;</a></h2>
+<p>A few of these are gaps between the <strong>normative spec</strong> (which describes the intended DSL) and the <strong>current binary</strong>. They are called out inline below with a <em>Spec vs. impl</em> note. The spec is aspirational where marked; the binary is canonical for what runs today.</p>
+<h2 id="build-inputs">Build inputs<a class="headerlink" href="#build-inputs" title="Permanent link">&para;</a></h2>
+<h3 id="add-url-archive-coverage"><code>ADD &lt;url&gt;</code> archive coverage<a class="headerlink" href="#add-url-archive-coverage" title="Permanent link">&para;</a></h3>
+<p><code>ADD &lt;url&gt;</code> fetches the payload (size-capped, re-fetched every build with the layer cache keyed on the payload digest) and extracts archives sniffed as <strong>tar</strong> or <strong>tar.gz</strong>; anything unrecognised, <strong><code>.zip</code> included</strong> (it sniffs as an opaque payload), is placed as a plain file rather than extracted. Payloads sniffing as <strong>xz / bzip2 / zstd / squashfs</strong> are rejected with <em>fetched payload is a … archive, which is not extracted yet</em>.</p>
+<ul>
+<li><strong>Spec vs. impl.</strong> The <a href="../specification/#add">ADD</a> directive lists <code>.tar.xz</code> and <code>.zip</code> among the recognised archives; the engine extracts tar and tar.gz today.</li>
+<li><strong>A gzip source must wrap a tar.</strong> Because the payload is fingerprinted by magic number, a gzip stream is always treated as a gzipped <em>tar</em>: a lone <code>.gz</code> of a single file, or a corrupt archive, fails the build with <em>could not be extracted as a tar archive</em> rather than landing as a plain file. Decompress it and <code>ADD</code> the result, or serve the content uncompressed.</li>
+<li><strong>Workaround.</strong> Repackage the resource as tar/tar.gz, or pre-extract it into the build context.</li>
+</ul>
+<h3 id="sbom-package-scanning">SBOM package scanning<a class="headerlink" href="#sbom-package-scanning" title="Permanent link">&para;</a></h3>
+<p><code>umf sbom generate</code> reads installed packages from the <strong>dpkg</strong>, <strong>apk</strong>, <strong>pacman</strong>, and <strong>sqlite rpm</strong> databases. The legacy Berkeley-DB rpm database (<code>/var/lib/rpm/Packages</code>, on RHEL/CentOS 7-8 and derivatives) is not read; on those images the generated SBOM lists no rpm packages. Use a base on the sqlite rpmdb (Fedora 33+, RHEL/derivatives 9+, openSUSE Leap 15.4+), or attach an externally-generated SBOM with <code>umf sbom attach</code>.</p>
+<h3 id="bootable-build-step-ordering">Bootable build step ordering<a class="headerlink" href="#bootable-build-step-ordering" title="Permanent link">&para;</a></h3>
+<p>Multi-stage bootable builds are supported: the <strong>final</strong> stage's <code>FROM</code> decides the shape (a kernel artifact makes the build bootable), earlier stages build as ordinary container producers, and the final stage consumes them with cross-stage <code>ADD --from=&lt;stage&gt;</code>. Only the final stage may be bootable — an earlier stage whose <code>FROM</code> resolves to a kernel (nested-bootable) is rejected.</p>
+<p>Two ordering notes carry over from the single-stage path. <code>SHELL</code> / <code>USER</code> / <code>WORKDIR</code> apply to subsequent <code>RUN</code> steps by wrapping each command host-side (<code>WORKDIR</code> → <code>cd</code>, <code>SHELL</code> → the interpreter argv, <code>USER</code> → <code>runuser</code>); a recipe that sets none of them runs byte-identically to before. Local, URL, and cross-stage <code>ADD</code>s are applied to the rootfs <strong>before</strong> the <code>RUN</code> steps rather than strictly interleaved in source order, so a <code>RUN</code> that precedes an <code>ADD</code> in the recipe still sees that <code>ADD</code>'s files. Author recipes <code>ADD</code>-before-<code>RUN</code> (the conventional order) and this is invisible.</p>
+<h3 id="expose-firewall-enforcement">EXPOSE firewall enforcement<a class="headerlink" href="#expose-firewall-enforcement" title="Permanent link">&para;</a></h3>
+<p>The spec describes <a href="../specification/#expose">EXPOSE</a> as emitting an actual default-deny nftables ruleset, not just metadata. That enforcement applies only to <strong>init-system bootable images</strong> (<code>ENTRYPOINT systemd</code> / <code>openrc</code>), where the generated <code>nftables</code> service is enabled so the ruleset loads at boot. Two shapes do not get it:</p>
+<ul>
+<li><strong>Container builds</strong> record the exposed ports as ordinary OCI image-config metadata only (<code>exposed_ports</code>); no nftables ruleset is programmed, and the container runtime governs reachability.</li>
+<li><strong>Appliance bootable images</strong> (a binary-path <code>ENTRYPOINT</code>, no init system) write <code>/etc/nftables.conf</code> but have no init to enable the <code>nftables</code> service, so the ruleset is present but not auto-loaded.</li>
+</ul>
+<p>So treat EXPOSE's default-deny as a guarantee of init-system bootable images; for the other shapes, enforce reachability with your runtime or an explicit boot-time hook.</p>
+<h2 id="rootless-builds">Rootless builds<a class="headerlink" href="#rootless-builds" title="Permanent link">&para;</a></h2>
+<p>A rootless (non-root) <code>umf build</code> runs inside a single user namespace UMF enters at startup. Four constraints apply; see <a href="../prerequisites/">Prerequisites</a> and <a href="../troubleshooting/">Troubleshooting</a>.</p>
+<ul>
+<li><strong>systemd-dependent cgroups.</strong> <code>RUN</code> steps are placed in a cgroup scope created by your user's systemd over its session bus (cgroup v2 delegation). A host with no systemd user session (a minimal image, some CI runners, a bare non-login shell) cannot place the step, and the build fails creating the cgroup. There is no rootless fs-cgroup fallback: youki's fs manager would write the root-owned <code>cgroup.subtree_control</code>. Build as root, or enable a lingering user session (<code>loginctl enable-linger</code>).</li>
+<li><strong>Single-id mapping.</strong> The map is container root to your user only. Base-image files owned by a non-root uid, and <code>RUN --user &lt;nonzero&gt;</code>, resolve to <code>nobody</code>. Faithful multi-uid ownership (idmapped lower layers or a subordinate range) is not yet implemented for the one-namespace path; build as root when it matters.</li>
+<li><strong>Rootless egress via userspace backends.</strong> Rootless <code>RUN</code> steps use a userspace egress backend selected with <code>--rootless-net</code>. The default is <code>native</code> (in-process smoltcp gateway, no external binary). <code>pasta</code> is an opt-in alternative requiring the <code>passt</code> package. <code>none</code> gives loopback only. The host veth plus NAT masquerade path is not used for rootless builds (it needs real root). Two caveats apply: (1) <code>pasta</code> has a weaker SSRF posture (coarse <code>--no-map-gw</code> guard only, no per-category deny); (2) name resolution under <code>native</code> fails when the host's only nameserver is a loopback stub (for example, systemd-resolved <code>127.0.0.53</code> with no <code>/run/systemd/resolve/resolv.conf</code> carrying real upstreams), because loopback traffic is not routed through the gateway. Egress to literal IPs is unaffected.</li>
+<li><strong>Ubuntu unprivileged-userns restriction.</strong> On Ubuntu 24.04+, <code>kernel.apparmor_restrict_unprivileged_userns=1</code> blocks namespace creation for the unconfined binary until you grant an AppArmor profile with the <code>userns,</code> permission or relax the sysctl.</li>
+</ul>
+<h2 id="disk-projection-umf-compile">Disk projection (<code>umf compile</code>)<a class="headerlink" href="#disk-projection-umf-compile" title="Permanent link">&para;</a></h2>
+<h3 id="ext4-erofs-root-partition-at-compile">ext4 / erofs root partition at compile<a class="headerlink" href="#ext4-erofs-root-partition-at-compile" title="Permanent link">&para;</a></h3>
+<p><code>umf compile</code> writes a <strong>squashfs</strong> root partition only. An image whose boot manifest sets <code>org.imagilux.umf.rootfs.fs=ext4</code> or <code>=erofs</code> is rejected: <em>ext4 / erofs are not implemented; rebuild with the default squashfs rootfs</em>.</p>
+<ul>
+<li><strong>Spec vs. impl.</strong> The <a href="../specification/#boot-manifest-labels">boot-manifest labels</a> table lists <code>squashfs</code> / <code>erofs</code> / <code>ext4</code> as the <code>rootfs.fs</code> value set; only <code>squashfs</code> is implemented by the projector.</li>
+</ul>
+<h3 id="grub-flavor"><code>grub</code> flavor<a class="headerlink" href="#grub-flavor" title="Permanent link">&para;</a></h3>
+<p><code>org.imagilux.umf.flavor</code> accepts <code>systemd-boot</code> (classic) and <code>uki</code>. <code>grub</code> is <strong>reserved</strong>: <code>umf compile</code> rejects it (<em><code>grub</code> is reserved</em>). An absent flavor defaults to <code>systemd-boot</code> with a warning; an unrecognised value is an error. Classic-flavor projection reads the bootloader <code>.efi</code> from inside the image rootfs (no host fallback), so a classic image shipping no bootloader is an error: switch to <code>flavor=uki</code> or install systemd-boot into the userland.</p>
+<h3 id="real-kernel-boot-validation">Real-kernel boot validation<a class="headerlink" href="#real-kernel-boot-validation" title="Permanent link">&para;</a></h3>
+<p>Real-kernel boot is validated end to end under <strong>QEMU/KVM</strong>: a CI boot-smoke test builds a minimal kernel + busybox image, <code>umf compile</code>s it to a GPT/ESP/squashfs UKI disk, and boots it to a userspace marker on the serial console. Bare-metal-specific hardware is not separately tested in CI; the projected UEFI disk is byte-identical whether it boots under a VMM or on hardware, so the QEMU/KVM validation exercises the same boot contract.</p>
+<h2 id="vm-runtime-umf-run">VM runtime (<code>umf run</code>)<a class="headerlink" href="#vm-runtime-umf-run" title="Permanent link">&para;</a></h2>
+<h3 id="cloud-hypervisor-firmware-auto-discovery-and-dhcp-based-port-forwarding">Cloud Hypervisor: firmware auto-discovery and DHCP-based port-forwarding<a class="headerlink" href="#cloud-hypervisor-firmware-auto-discovery-and-dhcp-based-port-forwarding" title="Permanent link">&para;</a></h3>
+<p>The <code>--vmm=ch</code> (Cloud Hypervisor) backend now does direct-kernel boot and host port-forwarding, with two caveats versus the default QEMU backend:</p>
+<ul>
+<li><strong>Firmware is mandatory for disk boot, with no auto-discovery.</strong> Cloud Hypervisor cannot boot a raw disk without a payload, so <code>umf run --vmm=ch --disk</code> requires <code>--firmware PATH</code> (it does not auto-discover OVMF the way QEMU does). Direct-kernel boot needs no firmware.</li>
+<li><strong>Port-forwarding is host-side and needs the guest to take a DHCP lease.</strong> Unlike QEMU's user-mode <code>hostfwd</code>, <code>-p/--port-forward --vmm=ch</code> sets up a per-VM network namespace + tap + nft DNAT, with a detached <code>dnsmasq</code> leasing the guest its address (gateway via the host veth). The guest must run a DHCP client, or you run your own DHCP in that namespace; <code>umf doctor</code> reports whether <code>dnsmasq</code> is present, and <code>nft</code> + <code>ip</code> are required.</li>
+</ul>
+<p>Use <code>--vmm=qemu</code> (the default) for auto-discovered firmware, or a guest image that does not configure its NIC.</p>
+<h2 id="cross-architecture">Cross-architecture<a class="headerlink" href="#cross-architecture" title="Permanent link">&para;</a></h2>
+<p><code>--platform=&lt;os&gt;/&lt;arch&gt;</code> selects the architecture for <strong>component resolution</strong> (base images, kernels) and for the bootable preflight (<code>qemu-system-&lt;arch&gt;</code> detection). Cross-arch <strong>container <code>RUN</code> execution</strong> (via <code>binfmt_misc</code> + qemu-user-static, as the spec's <a href="../specification/#cross-architecture-builds">Cross-Architecture Builds</a> describes) is a follow-up: a <code>--platform</code> that differs from the host arch resolves the right images but does not yet emulate foreign-arch <code>RUN</code> steps. Same-arch builds are unaffected.</p>
+<h2 id="oci-layer-encoding">OCI layer encoding<a class="headerlink" href="#oci-layer-encoding" title="Permanent link">&para;</a></h2>
+<p><code>umf build</code> emits gzip-compressed tar layers (<code>application/vnd.oci.image.layer.v1.tar+gzip</code>) by default and zstd (<code>…tar+zstd</code>, the OCI 1.1 media type) with <code>--compression zstd</code>. On the <strong>read</strong> side UMF transparently applies gzip-, zstd-, and uncompressed-tar layers; the build-staging unpacker is narrower and accepts gzip or plain tar only (a zstd/xz/bzip2-compressed staging archive is rejected: <em>staging unpacks gzip or plain tar only</em>). gzip layers interoperate with any OCI registry and with <code>docker</code> / <code>podman</code> / <code>skopeo</code>; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.expand", "content.code.copy", "content.code.annotate", "toc.follow", "toc.integrate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
