@@ -209,6 +209,35 @@ pub fn report<W: Write>(
         .write((source_name, Source::from(source)), writer)
 }
 
+/// Maximum number of diagnostics collected from one parse before further ones
+/// are dropped. The renderer only shows [`MAX_RENDERED_DIAGNOSTICS`] anyway;
+/// *collecting* millions from a pathological input (e.g. megabytes of invalid
+/// control bytes, each a lexer error carrying a formatted message and a long
+/// hint string) is a memory-exhaustion DoS — an 8 MiB input can balloon to
+/// gigabytes of RSS. This bounds the retained set.
+pub const MAX_COLLECTED_DIAGNOSTICS: usize = 256;
+
+/// Push `diag` into `sink` unless it has reached [`MAX_COLLECTED_DIAGNOSTICS`].
+/// At the cap it appends a single "further diagnostics suppressed" marker and
+/// then drops everything after, bounding memory on hostile input while keeping
+/// the first (most informative) errors. Returns `false` once the sink is
+/// capped, so a caller in a loop can stop early and also bound *time*.
+pub fn push_capped(sink: &mut Vec<Diagnostic>, diag: Diagnostic) -> bool {
+    if sink.len() < MAX_COLLECTED_DIAGNOSTICS {
+        sink.push(diag);
+        return true;
+    }
+    if sink.len() == MAX_COLLECTED_DIAGNOSTICS {
+        sink.push(Diagnostic::error(
+            format!(
+                "too many diagnostics; further errors suppressed after {MAX_COLLECTED_DIAGNOSTICS}"
+            ),
+            Annotation::new(Span::new(0, 0), "diagnostic limit reached"),
+        ));
+    }
+    false
+}
+
 /// Maximum number of diagnostics [`report_all`] renders; past this it prints a
 /// one-line summary instead of more reports.
 const MAX_RENDERED_DIAGNOSTICS: usize = 50;

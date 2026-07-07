@@ -104,6 +104,11 @@ impl<'a> Parser<'a> {
                 None => self.recover_to_next_stage(),
             }
             self.skip_newlines();
+            // Bound both memory and time on a pathological input (e.g. millions
+            // of tiny invalid stages): once the diagnostic set is capped, stop.
+            if self.errors.len() > diagnostics::MAX_COLLECTED_DIAGNOSTICS {
+                break;
+            }
         }
     }
 
@@ -239,6 +244,11 @@ impl<'a> Parser<'a> {
                         self.recover_to_eol();
                     }
                 }
+            }
+            // Stop a single giant stage of invalid directives from collecting
+            // an unbounded diagnostic set (memory/time DoS).
+            if self.errors.len() > diagnostics::MAX_COLLECTED_DIAGNOSTICS {
+                break;
             }
         }
 

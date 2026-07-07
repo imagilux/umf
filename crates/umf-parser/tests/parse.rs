@@ -1210,3 +1210,19 @@ fn parse_wrapper_succeeds_and_drops_warnings() {
     let ast = parse(src).expect("warning-only recipe must parse via the wrapper");
     assert!(ast.stages[0].directives.is_empty());
 }
+
+#[test]
+fn hostile_input_yields_a_bounded_diagnostic_set() {
+    // A quarter-megabyte of invalid control bytes would, uncapped, collect one
+    // fat diagnostic per byte (~256k diagnostics, gigabytes of RSS). The
+    // collection cap must bound it to a small constant.
+    use umf_parser::diagnostics::MAX_COLLECTED_DIAGNOSTICS;
+    let hostile = "\u{1}".repeat(256 * 1024);
+    let err = parse(&hostile).expect_err("all-control-byte input must fail");
+    assert!(
+        err.len() <= MAX_COLLECTED_DIAGNOSTICS + 4,
+        "diagnostics must be bounded (got {}, cap {})",
+        err.len(),
+        MAX_COLLECTED_DIAGNOSTICS
+    );
+}

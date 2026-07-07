@@ -218,7 +218,10 @@ impl<'a> Lexer<'a> {
                 c if is_word_start(c) => self.lex_word(),
                 _ => {
                     let span = Span::new(self.pos, self.pos + 1);
-                    self.errors.push(
+                    // Capped: a megabyte of invalid control bytes would otherwise
+                    // collect one fat diagnostic per byte (memory-exhaustion DoS).
+                    crate::diagnostics::push_capped(
+                        &mut self.errors,
                         Diagnostic::error(
                             format!("unexpected character `{}`", c as char),
                             Annotation::new(span, "not allowed here"),
@@ -304,7 +307,8 @@ impl<'a> Lexer<'a> {
         }
         // Unterminated string.
         let span = Span::new(start, self.pos);
-        self.errors.push(
+        crate::diagnostics::push_capped(
+            &mut self.errors,
             Diagnostic::error(
                 "unterminated string literal",
                 Annotation::new(span, "string starts here but never closes"),
@@ -333,7 +337,8 @@ impl<'a> Lexer<'a> {
         }
         let span = Span::new(start, self.pos);
         if overflowed {
-            self.errors.push(
+            crate::diagnostics::push_capped(
+                &mut self.errors,
                 Diagnostic::error(
                     "integer literal too large",
                     Annotation::new(span, "does not fit in a 64-bit unsigned integer"),
