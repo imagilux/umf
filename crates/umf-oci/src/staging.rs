@@ -107,13 +107,18 @@ impl BuildStaging {
         // reader.
         let combined = std::io::Read::chain(&peek[..peeked], reader);
 
+        // Cap the decompressed byte count so a gzip bomb can't fill the disk
+        // (mirrors `materialize::apply_layer`).
+        let cap = crate::materialize::max_uncompressed_layer_bytes();
         match format {
-            crate::format::Format::Gzip => self.unpack_tar_into_staging(GzDecoder::new(combined)),
+            crate::format::Format::Gzip => self.unpack_tar_into_staging(
+                crate::materialize::CappedReader::new(GzDecoder::new(combined), cap),
+            ),
             // A 6-byte prefix can't see the `ustar` magic at offset 257, so a
             // plain tar reads as `Unknown` here — that's fine, it falls through
             // to the uncompressed-tar branch below.
             f if f.is_compressed() => Err(StagingError::UnsupportedCompression(f.as_str())),
-            _ => self.unpack_tar_into_staging(combined),
+            _ => self.unpack_tar_into_staging(crate::materialize::CappedReader::new(combined, cap)),
         }
     }
 

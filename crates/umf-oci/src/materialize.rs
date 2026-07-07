@@ -92,13 +92,72 @@ pub fn apply_layer<R: Read>(source: R, target: &Path) -> io::Result<()> {
     let mut peek = [0u8; 4];
     let n = read_full(&mut reader, &mut peek)?;
     let combined = (&peek[..n]).chain(reader);
+    // Cap the *decompressed* byte count: the compressed blob is already capped
+    // on download (8 GiB), but gzip/zstd can expand a small blob to petabytes,
+    // so an uncapped decode would write until the disk fills.
+    let cap = max_uncompressed_layer_bytes();
     match format::detect(&peek[..n]) {
-        Format::Gzip => apply_tar(GzDecoder::new(combined), target),
-        Format::Zstd => apply_tar(zstd::stream::read::Decoder::new(combined)?, target),
+        Format::Gzip => apply_tar(CappedReader::new(GzDecoder::new(combined), cap), target),
+        Format::Zstd => apply_tar(
+            CappedReader::new(zstd::stream::read::Decoder::new(combined)?, cap),
+            target,
+        ),
         // A 4-byte prefix can't reach the `ustar` magic at offset 257, so an
         // uncompressed tar fingerprints as `Unknown` here — that's fine, it
         // falls through to the plain-tar branch.
-        _ => apply_tar(combined, target),
+        _ => apply_tar(CappedReader::new(combined, cap), target),
+    }
+}
+
+/// Default ceiling on a single layer's *decompressed* size. Generous enough for
+/// any realistic layer (the compressed side is already capped at 8 GiB, and real
+/// filesystem data rarely compresses past ~4×), while a decompression bomb —
+/// which reaches 1000×+ — trips it long before it exhausts the disk. Override
+/// with `UMF_MAX_UNCOMPRESSED_LAYER_BYTES`.
+const DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+
+/// Resolve the decompressed-layer size ceiling, honouring
+/// `UMF_MAX_UNCOMPRESSED_LAYER_BYTES` (a positive byte count) and falling back to
+/// [`DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES`].
+pub(crate) fn max_uncompressed_layer_bytes() -> u64 {
+    std::env::var("UMF_MAX_UNCOMPRESSED_LAYER_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES)
+}
+
+/// A [`Read`] adapter that fails once more than `cap` bytes have passed through
+/// it, so a decompression bomb aborts the unpack instead of filling the disk.
+/// Reads up to exactly `cap` bytes; the first read that would exceed it errors.
+pub(crate) struct CappedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> CappedReader<R> {
+    pub(crate) fn new(inner: R, cap: u64) -> Self {
+        Self {
+            inner,
+            remaining: cap,
+        }
+    }
+}
+
+impl<R: Read> Read for CappedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        match self.remaining.checked_sub(n as u64) {
+            Some(rem) => {
+                self.remaining = rem;
+                Ok(n)
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "decompressed layer exceeds the uncompressed-size ceiling \
+                 (possible decompression bomb); raise UMF_MAX_UNCOMPRESSED_LAYER_BYTES if legitimate",
+            )),
+        }
     }
 }
 
