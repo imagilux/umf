@@ -140,6 +140,10 @@ pub(super) fn apply_add(
             context: context_dir.display().to_string(),
         });
     }
+    // Refuse a source that escapes the build context via a symlink (Docker
+    // errors on context escapes too). Checked before `add_source_digest`, which
+    // would otherwise read the escaped host file to hash it.
+    crate::fsutil::ensure_source_contained(context_dir, &src_abs)?;
 
     // Cache lookup. Source-content digest folds in every file's bytes
     // and path, so any change busts the cache; the destination folds in the
@@ -245,6 +249,11 @@ fn apply_add_from_stage(
             context: format!("stage `{from_stage}` rootfs"),
         });
     }
+    // The producer rootfs is an untrusted tree (a prior stage runs recipe
+    // code); a planted symlink at an intermediate source component would let
+    // `fs::copy` read a host file into the emitted layer. Refuse any source
+    // that resolves outside the producer rootfs.
+    crate::fsutil::ensure_source_contained(producer_bundle.rootfs(), &src_abs)?;
 
     stage_copy_layer(state, cache, &key, &src_abs, dst, history_line)
 }
@@ -461,7 +470,9 @@ fn apply_add_oci_image(
     let upper_holder = TempDir::new()?;
     let upper_root = upper_holder.path().join("upper");
     std::fs::create_dir_all(&upper_root)?;
-    let dst_dir = path_within_upper(&upper_root, dst);
+    // Resolve `dst` under the (fresh, empty) upper-dir, creating its parent
+    // chain — `copy_dir_recursive` no longer creates missing parents itself.
+    let dst_dir = crate::fsutil::contained_write_path(&upper_root, dst)?;
     crate::fsutil::copy_dir_recursive(source_bundle.rootfs(), &dst_dir)?;
 
     package_and_cache_upper(state, cache, &key, upper_holder, upper_root, history_line)

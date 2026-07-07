@@ -576,10 +576,12 @@ pub async fn build_vm(
     // the OCI layer; `umf compile` copies it onto the ESP at projection time.
     let initrd_report = if entrypoint_init.is_init_system() {
         let (bytes, report) = generate_initramfs(&staging, &kernel_layout)?;
-        let dst = staging.path().join("boot").join(&report.filename);
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // `boot/` may be a symlink planted by the untrusted userland layer;
+        // resolve the write under the staging root refusing to follow it.
+        let dst = crate::fsutil::contained_write_path(
+            staging.path(),
+            &format!("boot/{}", report.filename),
+        )?;
         std::fs::write(&dst, &bytes)?;
         Some(report)
     } else {
@@ -734,14 +736,6 @@ fn reject_traversal(kind: &'static str, raw: &str) -> Result<(), BootableBuildEr
     Ok(())
 }
 
-/// Resolve a recipe destination against the staging root. A leading `/` is
-/// stripped so an absolute recipe path lands relative to the rootfs (the
-/// staging tree) rather than the host root. The caller has already rejected
-/// `..` traversal.
-fn staging_join(staging_root: &Path, dst: &str) -> PathBuf {
-    staging_root.join(dst.trim_start_matches('/'))
-}
-
 /// Apply docker's trailing-slash + source-shape rule to a local ADD
 /// destination: a trailing `/` (or a directory source) makes `dst` a
 /// directory the source lands inside; otherwise `dst` names the file.
@@ -798,13 +792,11 @@ fn add_local_into_staging(
             context: context.display().to_string(),
         });
     }
+    crate::fsutil::ensure_source_contained(context, &src_abs)?;
 
     let dst_inside = compute_add_destination(dst, &src_abs);
     reject_traversal("destination", &dst_inside)?;
-    let dst_abs = staging_join(staging.path(), &dst_inside);
-    if let Some(parent) = dst_abs.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let dst_abs = crate::fsutil::contained_write_path(staging.path(), &dst_inside)?;
     if src_abs.is_dir() {
         crate::fsutil::copy_dir_recursive(&src_abs, &dst_abs)?;
     } else {
@@ -854,13 +846,13 @@ fn add_from_stage_into_staging(
             context: format!("stage `{from_stage}` rootfs"),
         });
     }
+    // The producer rootfs is untrusted (a prior stage runs recipe code); refuse
+    // a source that escapes it via a planted symlink.
+    crate::fsutil::ensure_source_contained(producer_bundle.rootfs(), &src_abs)?;
 
     let dst_inside = compute_add_destination(dst, &src_abs);
     reject_traversal("destination", &dst_inside)?;
-    let dst_abs = staging_join(staging.path(), &dst_inside);
-    if let Some(parent) = dst_abs.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let dst_abs = crate::fsutil::contained_write_path(staging.path(), &dst_inside)?;
     if src_abs.is_dir() {
         crate::fsutil::copy_dir_recursive(&src_abs, &dst_abs)?;
     } else {
@@ -911,8 +903,7 @@ async fn add_url_into_staging(
                     detail: e.to_string(),
                 }
             })?;
-            let dst_dir = staging_join(staging.path(), dst);
-            std::fs::create_dir_all(&dst_dir)?;
+            let dst_dir = crate::fsutil::contained_write_path(staging.path(), dst)?;
             crate::fsutil::copy_dir_recursive(scratch.path(), &dst_dir)?;
         }
         Format::Zstd | Format::Xz | Format::Bzip2 | Format::Squashfs => {
@@ -928,10 +919,7 @@ async fn add_url_into_staging(
                 dst.to_string()
             };
             reject_traversal("destination", &dst_inside)?;
-            let dst_abs = staging_join(staging.path(), &dst_inside);
-            if let Some(parent) = dst_abs.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let dst_abs = crate::fsutil::contained_write_path(staging.path(), &dst_inside)?;
             std::fs::copy(fetched.file.path(), &dst_abs)?;
         }
     }
