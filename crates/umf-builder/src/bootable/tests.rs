@@ -289,6 +289,88 @@ async fn add_source_arg_expanding_to_traversal_is_rejected() {
     }
 }
 
+/// Alpine-shaped rootfs tarball carrying one planted symlink `<link> -> <target>`.
+/// Models an untrusted userland layer that ships an escaping symlink at the tree
+/// root (a legitimate rootfs uses symlinks freely; tar unpacks them verbatim).
+fn rootfs_tarball_with_symlink(link: &str, target: &Path) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut bytes);
+        b.mode(tar::HeaderMode::Deterministic);
+        let payload = &b"NAME=\"Alpine Linux\"\n"[..];
+        let mut h = tar::Header::new_gnu();
+        h.set_size(payload.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "etc/os-release", payload).unwrap();
+
+        let mut lh = tar::Header::new_gnu();
+        lh.set_entry_type(tar::EntryType::Symlink);
+        lh.set_size(0);
+        lh.set_mode(0o777);
+        lh.set_cksum();
+        b.append_link(&mut lh, link, target).unwrap();
+        b.finish().unwrap();
+    }
+    bytes
+}
+
+#[tokio::test]
+async fn bootable_add_refuses_write_through_userland_planted_symlink() {
+    // A malicious userland image (`ADD <rootfs> /`) plants `pwn -> <victim>` at
+    // the staging root; a following file-ADD into `/pwn/...` must NOT be
+    // redirected out of the staging tree onto the host filesystem (CVE-class:
+    // arbitrary host write during `umf build`).
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("layout");
+
+    let victim = dir.path().join("victim");
+    fs::create_dir_all(&victim).expect("victim dir");
+
+    let context = dir.path().join("ctx");
+    fs::create_dir_all(&context).expect("ctx");
+    fs::write(context.join("payload"), b"backdoor\n").expect("seed payload");
+
+    let ast = parse(
+        "FROM imagilux/kernel-linux:7.0\n\
+         ADD alpine:3.21.0 /\n\
+         ADD payload /pwn/loot\n\
+         ENTRYPOINT /myapp\n",
+    )
+    .expect("parse");
+
+    let rootfs_tarball = dir.path().join("rootfs.tar");
+    fs::write(&rootfs_tarball, rootfs_tarball_with_symlink("pwn", &victim)).expect("seed rootfs");
+    let opts = BootableBuildOptions {
+        context,
+        rootfs_path_override: Some(rootfs_tarball),
+        ..options_with_overrides(dir.path(), "7.0")
+    };
+
+    let err = build_vm(
+        &ast,
+        &layout,
+        None,
+        "example.invalid/bootable:symlink-escape",
+        &opts,
+        &no_stages(),
+    )
+    .await
+    .expect_err("write through a planted symlink must be refused");
+
+    match err {
+        BootableBuildError::Io(e) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied)
+        }
+        other => panic!("expected Io(PermissionDenied), got {other:?}"),
+    }
+    // The decisive check: nothing was written through the link onto the host.
+    assert!(
+        !victim.join("loot").exists(),
+        "the file escaped the staging root onto the host filesystem"
+    );
+}
+
 #[tokio::test]
 async fn builds_minimal_bootable_image() {
     let dir = tempdir().expect("tempdir");
