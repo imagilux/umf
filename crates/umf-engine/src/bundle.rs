@@ -656,6 +656,10 @@ fn build_runtime_spec(
         .map_err(spec_build_error)?;
 
     let caps_default = default_caps();
+    // Evaluate the seccomp profile's cap/arch gates against this exact
+    // capability set before it is moved into the capabilities builder — the
+    // gate result depends on which caps the RUN process actually holds.
+    let seccomp_profile = crate::seccomp::filtered_profile(&caps_default, options.architecture)?;
     let capabilities = LinuxCapabilitiesBuilder::default()
         .bounding(caps_default.clone())
         .effective(caps_default.clone())
@@ -732,27 +736,24 @@ fn build_runtime_spec(
     }
 
     // Bound runaway RUN steps (e.g. an accidental fork-bomb in untrusted build
-    // instructions) with a cgroup pids cap. Applied for every build that owns
-    // its cgroup placement: a real-root build (fs cgroup manager writes
-    // `pids.max`) and a rootless build that entered its own user namespace
-    // (youki's systemd manager sets the cap as `TasksMax` on the user-delegated
-    // scope; pids is a delegated controller on a normal user session).
-    // The only build left without it is the legacy library-consumer path that
-    // asks youki for a user namespace instead of entering one (`rootless`),
-    // where we don't own the cgroup setup.
-    if !options.rootless {
-        linux_builder = linux_builder.resources(build_run_resources()?);
-    }
+    // instructions) with a cgroup pids cap. Emitted unconditionally: the
+    // real-root build's fs cgroup manager writes `pids.max`, a rootless build
+    // that entered its own user namespace gets it as `TasksMax` on the
+    // user-delegated scope, and even the legacy library-consumer path that asks
+    // youki for the user namespace now carries the limit so any runtime with
+    // pids-controller delegation enforces it. `LinuxResources` is advisory — a
+    // host without pids delegation simply gets no ceiling (best-effort), never
+    // a hard failure — so emitting it always fails safe.
+    linux_builder = linux_builder.resources(build_run_resources()?);
 
-    // Apply the vendored containerd/Docker default seccomp profile to every
-    // RUN step: deny-by-default with a large safe-syscall allowlist,
-    // so a RUN step can't reach the dangerous tail of the host syscall surface
-    // (`kexec_load`, `bpf`, arbitrary `ptrace`, ...). Applied for both root and
-    // rootless builds. A parse failure is a build-time bug in the embedded
-    // resource, not a host condition, so it propagates as a hard error rather
-    // than silently leaving the RUN step unfiltered. libcontainer enforces it
-    // via its `libseccomp` feature (enabled in the workspace `Cargo.toml`).
-    linux_builder = linux_builder.seccomp(crate::seccomp::default_profile()?);
+    // Attach the gate-evaluated containerd/Docker default seccomp profile
+    // (computed above from `caps_default` + target arch): deny-by-default with a
+    // large safe-syscall allowlist, so a RUN step can't reach the dangerous tail
+    // of the host syscall surface (`kexec_load`, `bpf`, arbitrary `ptrace`,
+    // `unshare`/`setns`/`mount` — all gated behind caps this container never
+    // holds). Applied for both root and rootless builds. libcontainer enforces
+    // it via its `libseccomp` feature (enabled in the workspace `Cargo.toml`).
+    linux_builder = linux_builder.seccomp(seccomp_profile);
 
     let linux = linux_builder
         .namespaces(namespaces)
