@@ -68,3 +68,29 @@ fn report_all_caps_rendered_diagnostics() {
         "must note the truncated remainder"
     );
 }
+
+#[test]
+fn push_capped_bounds_collection_and_appends_marker() {
+    let mut sink = Vec::new();
+    let make = || Diagnostic::error("x", Annotation::new(Span::new(0, 1), "here"));
+    // Push far more than the cap.
+    for _ in 0..(MAX_COLLECTED_DIAGNOSTICS * 4) {
+        push_capped(&mut sink, make());
+    }
+    // Bounded to the cap plus exactly one "suppressed" marker.
+    assert_eq!(sink.len(), MAX_COLLECTED_DIAGNOSTICS + 1);
+    assert!(
+        sink.last()
+            .unwrap()
+            .message
+            .contains("further errors suppressed"),
+        "the final diagnostic is the suppression marker"
+    );
+    // Returns false once capped.
+    assert!(!push_capped(&mut sink, make()));
+    assert_eq!(
+        sink.len(),
+        MAX_COLLECTED_DIAGNOSTICS + 1,
+        "no growth past the cap"
+    );
+}
