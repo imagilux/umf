@@ -10,6 +10,15 @@ fn first_stage_from(src: &str) -> umf_core::ast::Stage {
     ast.stages.into_iter().next().expect("stage")
 }
 
+/// Seed a fake `nft` binary in the staging tree — EXPOSE now fails closed
+/// unless the userland ships one, so every "happy path" test must represent an
+/// image that carries the nftables package.
+fn seed_nft_binary(staging: &BuildStaging) {
+    let sbin = staging.path().join("usr/sbin");
+    fs::create_dir_all(&sbin).expect("mkdir usr/sbin");
+    fs::write(sbin.join("nft"), b"#!/bin/sh\n").expect("seed nft");
+}
+
 // HOSTNAME / LOCALE / TIMEZONE are not UMF directives (first-boot concerns
 // for cloud-init / ignition), so there are no runtime_config write-paths or
 // tests for them. EXPOSE remains the runtime-config directive.
@@ -23,6 +32,7 @@ fn expose_writes_nftables_with_default_deny() {
          EXPOSE 53/udp\n",
     );
     let mut staging = BuildStaging::new().expect("staging");
+    seed_nft_binary(&staging);
     let report = apply_runtime_config(&stage, &mut staging).expect("apply");
     assert_eq!(report.exposed_ports, 3);
 
@@ -63,9 +73,44 @@ fn entrypoint_none_errors() {
 fn expose_also_enables_nftables_service() {
     let stage = first_stage_from("FROM imagilux/kernel-linux:7.0\nEXPOSE 80/tcp\n");
     let mut staging = BuildStaging::new().expect("staging");
+    seed_nft_binary(&staging);
     apply_runtime_config(&stage, &mut staging).expect("apply");
     let link = staging
         .path()
         .join("etc/systemd/system/multi-user.target.wants/nftables.service");
     assert!(link.is_symlink(), "nftables service not enabled");
+}
+
+#[test]
+fn expose_without_nft_binary_fails_closed() {
+    // EXPOSE promises a default-deny firewall. An image that ships no `nft`
+    // binary can't load the ruleset, so the build must fail rather than emit an
+    // image whose firewall silently never comes up.
+    let stage = first_stage_from("FROM imagilux/kernel-linux:7.0\nEXPOSE 80/tcp\n");
+    let mut staging = BuildStaging::new().expect("staging");
+    let err = apply_runtime_config(&stage, &mut staging).unwrap_err();
+    assert!(
+        matches!(err, RuntimeConfigError::ExposeUnenforceable { .. }),
+        "expected ExposeUnenforceable, got {err:?}"
+    );
+    // Nothing half-written: no ruleset, no enable link.
+    assert!(!staging.path().join("etc/nftables.conf").exists());
+}
+
+#[test]
+fn expose_with_appliance_entrypoint_fails_closed() {
+    // A binary/appliance ENTRYPOINT has no init system to load the ruleset, so
+    // EXPOSE can't be enforced even if `nft` is present.
+    let stage = first_stage_from(
+        "FROM imagilux/kernel-linux:7.0\n\
+         EXPOSE 80/tcp\n\
+         ENTRYPOINT /myapp\n",
+    );
+    let mut staging = BuildStaging::new().expect("staging");
+    seed_nft_binary(&staging);
+    let err = apply_runtime_config(&stage, &mut staging).unwrap_err();
+    assert!(
+        matches!(err, RuntimeConfigError::ExposeUnenforceable { .. }),
+        "expected ExposeUnenforceable, got {err:?}"
+    );
 }

@@ -39,9 +39,31 @@ pub enum RuntimeConfigError {
     #[error("ENTRYPOINT none is not valid for a bootable build (no PID 1)")]
     EntrypointNone,
 
+    /// `EXPOSE` was declared but the produced image can't enforce the
+    /// default-deny firewall it promises — the userland ships no `nft` binary,
+    /// or the `ENTRYPOINT` is not an init system that loads the ruleset at boot.
+    /// Failing closed: silently shipping an image whose EXPOSE default-deny
+    /// never loads would be a firewall that isn't there (the spec is explicit
+    /// that EXPOSE is default-deny, not metadata).
+    #[error("EXPOSE cannot be enforced for this image: {detail}")]
+    ExposeUnenforceable {
+        /// What's missing and how to fix it.
+        detail: String,
+    },
+
     /// Underlying I/O error.
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// In-image locations the generated `nftables.conf` / init unit expect the
+/// `nft` binary at. Its presence is the build-time proxy for "the userland
+/// ships the nftables package" (which also carries the init unit that loads the
+/// ruleset).
+const NFT_BINARY_PATHS: &[&str] = &["usr/sbin/nft", "sbin/nft", "usr/bin/nft", "bin/nft"];
+
+fn nft_binary_present(root: &Path) -> bool {
+    NFT_BINARY_PATHS.iter().any(|rel| root.join(rel).exists())
 }
 
 // ── Result ──────────────────────────────────────────────────────────────────
@@ -100,20 +122,47 @@ pub fn apply_runtime_config(
         })
         .collect();
     if !exposes.is_empty() {
-        write_nftables(&root, &exposes)?;
-        debug!(count = exposes.len(), "wrote nftables EXPOSE ruleset");
-        report.exposed_ports = exposes.len();
-        if matches!(
+        // Fail closed: EXPOSE promises a default-deny firewall. If nothing in
+        // the produced image would load it, refuse to build rather than ship an
+        // image that claims default-deny but has no firewall at all.
+
+        // 1. Only an init-system ENTRYPOINT (systemd/openrc) runs the service
+        //    that loads the ruleset at boot. A binary/appliance ENTRYPOINT has
+        //    no service manager, so the ruleset would sit unloaded.
+        if !matches!(
             init_system,
             Some(InitSystemKind::Systemd | InitSystemKind::OpenRc)
         ) {
-            // Hardcoded valid name; the parser would catch any typo at compile time
-            // of the builder, not at runtime.
-            #[allow(clippy::expect_used)]
-            let nftables =
-                ServiceUnitName::new("nftables").expect("`nftables` is a valid bare unit name");
-            enable_service(&root, init_system, &nftables)?;
+            return Err(RuntimeConfigError::ExposeUnenforceable {
+                detail: "the ENTRYPOINT is a binary/appliance, so no init system loads the \
+                         nftables ruleset at boot; EXPOSE default-deny requires an init-system \
+                         ENTRYPOINT (systemd or openrc)"
+                    .to_string(),
+            });
         }
+
+        // 2. The generated ruleset is loaded by the userland's nftables package;
+        //    without an `nft` binary the service can't apply it (dangling
+        //    enable) and the firewall silently never comes up.
+        if !nft_binary_present(&root) {
+            return Err(RuntimeConfigError::ExposeUnenforceable {
+                detail: "the userland ships no `nft` binary (looked under /usr/sbin, /sbin, \
+                         /usr/bin, /bin), so the enabled nftables service can't load the \
+                         default-deny ruleset; add an nftables package to the userland (e.g. \
+                         `RUN apk add nftables`) or drop the EXPOSE directive"
+                    .to_string(),
+            });
+        }
+
+        write_nftables(&root, &exposes)?;
+        debug!(count = exposes.len(), "wrote nftables EXPOSE ruleset");
+        report.exposed_ports = exposes.len();
+        // Hardcoded valid name; the parser would catch any typo at compile time
+        // of the builder, not at runtime.
+        #[allow(clippy::expect_used)]
+        let nftables =
+            ServiceUnitName::new("nftables").expect("`nftables` is a valid bare unit name");
+        enable_service(&root, init_system, &nftables)?;
     }
 
     Ok(report)
