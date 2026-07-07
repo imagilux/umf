@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use umf_oci::materialize::contained_read;
+
 /// One installed package, distilled to the fields an SBOM needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Package {
@@ -38,33 +40,37 @@ pub(crate) struct Inventory {
 pub(crate) fn scan_rootfs(root: &Path) -> std::io::Result<Inventory> {
     let os_id = read_os_id(root);
 
-    let dpkg = root.join("var/lib/dpkg/status");
-    if dpkg.is_file() {
+    // Every database path is resolved through `contained_read`: the rootfs is
+    // untrusted, so a layer can plant e.g. `var/lib/dpkg/status -> /etc/shadow`
+    // whose placement is legal but whose target escapes the rootfs. Following it
+    // would fold a host file into the SBOM (and, with `--attach --push`, publish
+    // it). `contained_read` returns the path only when it stays inside `root`.
+    if let Some(dpkg) = db_file(root, "var/lib/dpkg/status") {
         let body = std::fs::read_to_string(&dpkg)?;
         let ns = os_id.as_deref().unwrap_or("debian").to_string();
         let packages = parse_dpkg(&body, &ns);
         return Ok(finish(os_id, packages));
     }
-    let apk = root.join("lib/apk/db/installed");
-    if apk.is_file() {
+    if let Some(apk) = db_file(root, "lib/apk/db/installed") {
         let body = std::fs::read_to_string(&apk)?;
         let ns = os_id.as_deref().unwrap_or("alpine").to_string();
         let packages = parse_apk(&body, &ns);
         return Ok(finish(os_id, packages));
     }
-    let pacman = root.join("var/lib/pacman/local");
-    if pacman.is_dir() {
-        return Ok(finish(os_id, parse_pacman(&pacman)?));
+    if let Some(pacman) =
+        contained_read(root, &root.join("var/lib/pacman/local")).filter(|p| p.is_dir())
+    {
+        return Ok(finish(os_id, parse_pacman(root, &pacman)?));
     }
     // rpm: the modern sqlite rpmdb. Newer distros keep it under
     // /usr/lib/sysimage/rpm; older ones under /var/lib/rpm (often a symlink to
-    // the former). The legacy Berkeley-DB `Packages` file is not read.
+    // the former — an *internal* symlink, which `contained_read` allows). The
+    // legacy Berkeley-DB `Packages` file is not read.
     for rpmdb in [
         "usr/lib/sysimage/rpm/rpmdb.sqlite",
         "var/lib/rpm/rpmdb.sqlite",
     ] {
-        let path = root.join(rpmdb);
-        if path.is_file() {
+        if let Some(path) = db_file(root, rpmdb) {
             let ns = os_id.as_deref().unwrap_or("redhat").to_string();
             return Ok(finish(os_id, rpm::parse_rpmdb(&path, &ns)?));
         }
@@ -73,6 +79,13 @@ pub(crate) fn scan_rootfs(root: &Path) -> std::io::Result<Inventory> {
         os_id,
         packages: Vec::new(),
     })
+}
+
+/// Resolve a rootfs-relative package-DB path to a real *file* inside `root`,
+/// refusing a symlink that escapes the rootfs. `None` when absent, not a
+/// regular file, or escaping.
+fn db_file(root: &Path, rel: &str) -> Option<std::path::PathBuf> {
+    contained_read(root, &root.join(rel)).filter(|p| p.is_file())
 }
 
 /// Sort + dedup the package list for reproducibility and bundle it with the
@@ -85,9 +98,12 @@ fn finish(os_id: Option<String>, mut packages: Vec<Package>) -> Inventory {
     Inventory { os_id, packages }
 }
 
-/// `/etc/os-release` `ID=...` (quotes stripped), best-effort.
+/// `/etc/os-release` `ID=...` (quotes stripped), best-effort. Read through
+/// `contained_read` so a `etc/os-release -> /host/file` symlink can't redirect
+/// the read off the rootfs.
 fn read_os_id(root: &Path) -> Option<String> {
-    let body = std::fs::read_to_string(root.join("etc/os-release")).ok()?;
+    let path = contained_read(root, &root.join("etc/os-release"))?;
+    let body = std::fs::read_to_string(path).ok()?;
     body.lines().find_map(|line| {
         line.strip_prefix("ID=")
             .map(|v| v.trim().trim_matches('"').to_string())
@@ -157,13 +173,21 @@ fn parse_apk(body: &str, os_ns: &str) -> Vec<Package> {
 /// Parse a pacman local database: `var/lib/pacman/local/<pkg>/desc`, each a
 /// sectioned file with `%NAME%` / `%VERSION%` / `%ARCH%` headers followed by
 /// their value on the next line.
-fn parse_pacman(dir: &Path) -> std::io::Result<Vec<Package>> {
+fn parse_pacman(root: &Path, dir: &Path) -> std::io::Result<Vec<Package>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir)? {
-        let desc = entry?.path().join("desc");
-        if !desc.is_file() {
+        let entry = entry?;
+        // Skip a symlinked package directory outright (file_type from read_dir
+        // does not follow the link), so it can't redirect the walk off-rootfs.
+        if !entry.file_type()?.is_dir() {
             continue;
         }
+        // Contain the per-package `desc` read too: a real package dir could hold
+        // a `desc` symlink pointing at a host file.
+        let Some(desc) = contained_read(root, &entry.path().join("desc")).filter(|p| p.is_file())
+        else {
+            continue;
+        };
         let body = std::fs::read_to_string(&desc)?;
         let (name, version, arch) = parse_pacman_desc(&body);
         if let (Some(name), Some(version)) = (name, version) {

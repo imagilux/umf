@@ -306,3 +306,21 @@ fn capped_reader_passes_a_stream_at_exactly_the_cap() {
     assert_eq!(r.read_to_end(&mut sink).unwrap(), 64);
     assert_eq!(sink, &data[..]);
 }
+
+#[test]
+fn contained_read_rejects_escape_allows_internal() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret"), b"x").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret"), root.path().join("escape")).unwrap();
+    // Escaping symlink → None (treated as absent).
+    assert!(contained_read(root.path(), &root.path().join("escape")).is_none());
+
+    // Internal file → resolved path within root.
+    std::fs::write(root.path().join("real"), b"y").unwrap();
+    let got = contained_read(root.path(), &root.path().join("real")).unwrap();
+    assert!(got.starts_with(root.path().canonicalize().unwrap()));
+
+    // Absent → None.
+    assert!(contained_read(root.path(), &root.path().join("nope")).is_none());
+}
