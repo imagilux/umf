@@ -155,12 +155,13 @@ fn runtime_spec_has_cgroup_namespace_and_root_resources() {
 }
 
 #[test]
-fn rootless_entered_userns_gets_pids_cap_but_legacy_fallback_does_not() {
-    // A rootless build that entered its own user namespace
-    // (`rootless: false`, not host-privileged) still carries the fork-bomb pids
-    // cap — youki's systemd manager applies it as TasksMax in the delegated
-    // scope. The legacy library-consumer fallback (`rootless: true`, where youki
-    // creates the user namespace) does not, since we don't own its cgroup setup.
+fn every_build_shape_carries_the_fork_bomb_pids_cap() {
+    // The fork-bomb pids cap is emitted for every build shape. A real-root build
+    // and a rootless build that entered its own user namespace enforce it
+    // directly; the legacy library-consumer fallback (`rootless: true`, where
+    // youki creates the user namespace) now also carries it so any runtime with
+    // pids-controller delegation enforces it — `LinuxResources` is advisory, so
+    // a host without delegation just gets no ceiling rather than a hard failure.
     let entered = BundleOptions {
         rootless: false,
         host_privileged: false,
@@ -194,8 +195,8 @@ fn rootless_entered_userns_gets_pids_cap_but_legacy_fallback_does_not() {
     };
     assert_eq!(
         pids_limit(&legacy),
-        None,
-        "legacy rootless fallback must not set a pids cap"
+        Some(4096),
+        "legacy rootless fallback must also carry the pids cap"
     );
 }
 
