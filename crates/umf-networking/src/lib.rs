@@ -63,6 +63,10 @@ pub enum NetError {
     /// failed.
     #[error("vm-net plumbing: {0}")]
     VmNet(String),
+    /// The egress-policy allow-list (`UMF_ROOTLESS_NET_ALLOW`) named an unknown
+    /// address category.
+    #[error("egress policy: {0}")]
+    EgressPolicy(String),
 }
 
 /// Fallback MTU when the host egress MTU can't be determined: the classic
@@ -186,6 +190,14 @@ fn setup_inner(pid: u32, plan: IpPlan, mtu: u32) -> Result<ContainerNet, NetErro
     let ctr_if = format!("umfv{pid}c");
     let nft_table = format!("umf-nat-{pid}");
 
+    // Egress SSRF policy: deny host-internal destinations by default (cloud
+    // metadata, RFC1918, loopback, CGNAT), re-openable via UMF_ROOTLESS_NET_ALLOW
+    // — the same knob the rootless proxy uses, so both execution modes honour one
+    // policy. Built first so a bad env value fails before any veth/table exists.
+    let policy =
+        ssrf::EgressPolicy::from_env().map_err(|e| NetError::EgressPolicy(e.to_string()))?;
+    let deny_cidrs = policy.denied_v4_cidrs();
+
     // Host side: create the veth, address + raise the host end, and move the
     // peer into the container's netns. Async rtnetlink on a local runtime.
     let rt = current_thread_rt()?;
@@ -195,7 +207,7 @@ fn setup_inner(pid: u32, plan: IpPlan, mtu: u32) -> Result<ContainerNet, NetErro
     // `ContainerNet` Drop guard (the only teardown) isn't live until we return
     // `Ok`, so on any error here we must roll back what we created — otherwise
     // the host veth / NAT table / ip_forward flip would leak.
-    match setup_egress(pid, &ctr_if, &plan, &nft_table, mtu) {
+    match setup_egress(pid, &ctr_if, &plan, &nft_table, mtu, &deny_cidrs) {
         Ok(prior_ip_forward) => {
             debug!(
                 pid,
@@ -231,10 +243,11 @@ fn setup_egress(
     plan: &IpPlan,
     nft_table: &str,
     mtu: u32,
+    deny_cidrs: &[&str],
 ) -> Result<Option<String>, (NetError, Option<String>)> {
     configure_container_side(pid, ctr_if, plan, mtu).map_err(|e| (e, None))?;
     let prior = enable_ipv4_forwarding().map_err(|e| (e, None))?;
-    add_masquerade(nft_table, &plan.cidr()).map_err(|e| (e, prior.clone()))?;
+    add_masquerade(nft_table, &plan.cidr(), deny_cidrs).map_err(|e| (e, prior.clone()))?;
     Ok(prior)
 }
 
@@ -484,23 +497,55 @@ fn forward_restore_target(prior: Option<&str>) -> Option<String> {
 
 /// Add a dedicated `inet` NAT table with a postrouting masquerade rule that
 /// SNATs the container's `/30` out through whatever host interface the default
-/// route picks. Its own table (named per-container) so teardown is a single
-/// atomic `delete table`, never touching the host's other nftables state.
+/// route picks, plus an SSRF forward-drop chain that refuses the container's
+/// routed egress to host-internal ranges (cloud metadata `169.254.169.254`,
+/// RFC1918, loopback, CGNAT — every category `deny_cidrs` carries). Its own
+/// table (named per-container) so teardown is a single atomic `delete table`,
+/// never touching the host's other nftables state.
+///
+/// The drop lives on the `forward` hook, so it only affects packets *routed*
+/// between interfaces — the container reaching its own gateway or same-subnet
+/// peer (delivered locally, not forwarded) is unaffected, and public egress is
+/// accepted. `deny_cidrs` empty (operator re-allowed everything via
+/// `UMF_ROOTLESS_NET_ALLOW`) omits the forward chain entirely.
 ///
 /// Applied via `nft -f -` rather than a netlink crate: the subprocess guardrail
 /// allows `nft` (same as `ip`), and the pure-Rust alternative (`rustables`)
 /// double-closes its socket and aborts the process under modern `nix`.
-fn add_masquerade(table_name: &str, subnet_cidr: &str) -> Result<(), NetError> {
+fn add_masquerade(
+    table_name: &str,
+    subnet_cidr: &str,
+    deny_cidrs: &[&str],
+) -> Result<(), NetError> {
+    nft_apply(&masquerade_ruleset(table_name, subnet_cidr, deny_cidrs))
+}
+
+/// Build the per-container NAT ruleset: a postrouting masquerade for the
+/// subnet, plus (when `deny_cidrs` is non-empty) a forward-hook drop of the
+/// subnet's routed egress to those host-internal destinations. Split from
+/// [`add_masquerade`] so the generated rules are unit-testable without `nft`.
+fn masquerade_ruleset(table_name: &str, subnet_cidr: &str, deny_cidrs: &[&str]) -> String {
     // `priority srcnat` (100) is the conventional source-NAT hook priority.
-    let ruleset = format!(
+    let mut ruleset = format!(
         "table inet {table_name} {{\n\
          \x20   chain postrouting {{\n\
          \x20       type nat hook postrouting priority srcnat; policy accept;\n\
          \x20       ip saddr {subnet_cidr} masquerade\n\
-         \x20   }}\n\
-         }}\n"
+         \x20   }}\n"
     );
-    nft_apply(&ruleset)
+    if !deny_cidrs.is_empty() {
+        // An anonymous set of the denied destinations; a single terminal drop
+        // for the container subnet reaching any of them.
+        let set = deny_cidrs.join(", ");
+        ruleset.push_str(&format!(
+            "\x20   chain forward {{\n\
+             \x20       type filter hook forward priority filter; policy accept;\n\
+             \x20       ip saddr {subnet_cidr} ip daddr {{ {set} }} drop\n\
+             \x20   }}\n"
+        ));
+    }
+    ruleset.push_str("}\n");
+    ruleset
 }
 
 /// Remove the NAT table created by [`add_masquerade`].

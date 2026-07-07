@@ -65,3 +65,47 @@ fn ip_plan_wraps_within_the_16_base() {
     assert_eq!(p.cidr(), "10.69.0.0/30");
     assert!(p.host.octets()[0] == 10 && p.host.octets()[1] == 69);
 }
+
+#[test]
+fn masquerade_ruleset_includes_ssrf_forward_drop_by_default() {
+    // The default (deny-all) policy must produce a forward-hook drop covering
+    // the cloud-metadata IP and every host-internal range for the subnet.
+    let deny = crate::ssrf::EgressPolicy::deny_all().denied_v4_cidrs();
+    let rs = masquerade_ruleset("umf-nat-1", "10.69.0.4/30", &deny);
+
+    // Masquerade still present.
+    assert!(rs.contains("ip saddr 10.69.0.4/30 masquerade"));
+    // SSRF forward drop present, scoped to the subnet, terminal `drop`.
+    assert!(rs.contains("hook forward"));
+    assert!(rs.contains("ip saddr 10.69.0.4/30 ip daddr {"));
+    assert!(rs.trim_end().ends_with("}"));
+    // The cloud-metadata range (169.254.0.0/16 ⊇ 169.254.169.254) and RFC1918
+    // are in the drop set.
+    assert!(rs.contains("169.254.0.0/16"));
+    assert!(rs.contains("10.0.0.0/8"));
+    assert!(rs.contains("192.168.0.0/16"));
+    assert!(rs.contains("drop"));
+}
+
+#[test]
+fn masquerade_ruleset_omits_forward_chain_when_all_allowed() {
+    // Operator re-allowed every category → no forward drop chain, just NAT.
+    let policy =
+        crate::ssrf::EgressPolicy::from_allow_list("loopback, link-local, rfc1918, ula, cgnat")
+            .expect("allow-list parses");
+    let deny = policy.denied_v4_cidrs();
+    assert!(deny.is_empty());
+    let rs = masquerade_ruleset("umf-nat-2", "10.69.0.4/30", &deny);
+    assert!(rs.contains("masquerade"));
+    assert!(!rs.contains("hook forward"));
+    assert!(!rs.contains("drop"));
+}
+
+#[test]
+fn denied_v4_cidrs_shrinks_when_a_category_is_reallowed() {
+    // Re-allowing rfc1918 drops those three prefixes but keeps metadata denied.
+    let policy = crate::ssrf::EgressPolicy::from_allow_list("rfc1918").expect("parses");
+    let deny = policy.denied_v4_cidrs();
+    assert!(deny.contains(&"169.254.0.0/16"), "metadata stays denied");
+    assert!(!deny.contains(&"10.0.0.0/8"), "rfc1918 re-allowed");
+}
