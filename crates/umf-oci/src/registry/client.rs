@@ -478,6 +478,17 @@ impl RegistryClient {
                     found: computed,
                 });
             }
+            if reference.digest().is_none() {
+                // Pulled by a mutable tag, so the manifest's own integrity rests
+                // on the transport (TLS) plus the registry's Docker-Content-Digest
+                // header, not on a caller-pinned digest. Referenced blobs are still
+                // digest-verified; integrity-critical callers should pin `@sha256:`.
+                debug!(
+                    reference = %reference,
+                    "manifest pulled by mutable tag (not digest-pinned); \
+                     manifest integrity relies on transport"
+                );
+            }
 
             let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
             layout.write_blob_with_digest(&manifest_bytes, &manifest_digest)?;

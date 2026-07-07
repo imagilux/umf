@@ -57,14 +57,15 @@ pub fn encoder_available() -> bool {
 }
 
 /// Ensure an erofs encoding of the layer with the given OCI `layer_digest`
-/// (the gzip-tar blob digest) and `diff_id` (uncompressed-tar digest)
-/// exists in `layout`'s erofs cache, returning its path.
+/// (the gzip-tar blob digest) exists in `layout`'s erofs cache, returning its
+/// path. `diff_id` (the uncompressed-tar digest) is carried for logging only;
+/// the cache is keyed on `layer_digest`, the value the blob store verifies.
 ///
-/// Idempotent and content-addressed: if the cached erofs already exists
-/// it is returned untouched (the cross-image dedup win). Otherwise the
-/// layer's gzip-tar blob (already a file in the layout's blob store) is
-/// encoded directly; the output is written to a temp file in the cache
-/// directory and atomically renamed into place, so a crashed or
+/// Idempotent and content-addressed on the verified layer digest: if the
+/// cached erofs already exists it is returned untouched (the cross-image dedup
+/// win). Otherwise the layer's gzip-tar blob (already a file in the layout's
+/// blob store) is encoded directly; the output is written to a temp file in the
+/// cache directory and atomically renamed into place, so a crashed or
 /// concurrent encode never leaves a partial erofs behind.
 ///
 /// # Errors
@@ -76,11 +77,14 @@ pub fn ensure_layer_erofs(
     layer_digest: &str,
     diff_id: &str,
 ) -> Result<PathBuf, RegistryError> {
-    let out = layout.erofs_cache_path(diff_id)?;
+    // Key the cache on the *verified* layer digest, not the manifest's
+    // (untrusted) diff_id — otherwise a lying diff_id could make this image
+    // reuse another image's cached erofs (content substitution).
+    let out = layout.erofs_cache_path(layer_digest)?;
     // Content-addressed cache hit: a non-empty file is a complete encode
     // (writes are atomic — see below), so reuse it verbatim.
     if out.metadata().is_ok_and(|m| m.len() > 0) {
-        debug!(diff_id, path = %out.display(), "erofs cache hit");
+        debug!(layer_digest, diff_id, path = %out.display(), "erofs cache hit");
         return Ok(out);
     }
 

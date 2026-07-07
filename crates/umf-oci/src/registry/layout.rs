@@ -140,15 +140,19 @@ impl ImageLayout {
         Ok(self.root.join(BLOBS_DIR).join(algo).join(hex))
     }
 
-    /// Filesystem path to the erofs-encoded form of the layer whose
-    /// uncompressed-tar digest (OCI `diff_id`) is `diff_id`. The file may
-    /// or may not exist; [`crate::erofs::ensure_layer_erofs`] produces it.
+    /// Filesystem path to the erofs-encoded form of the layer whose compressed
+    /// blob digest (the OCI layer `digest`) is `layer_digest`. The file may or
+    /// may not exist; [`crate::erofs::ensure_layer_erofs`] produces it.
     ///
-    /// Content-addressed on the diff_id, so a base layer shared across
-    /// images resolves to one erofs file (cross-image dedup). `diff_id`
-    /// must be in spec form `sha256:hex`.
-    pub fn erofs_cache_path(&self, diff_id: &str) -> Result<PathBuf, RegistryError> {
-        let (_algo, hex) = split_digest(diff_id)?;
+    /// Content-addressed on the **layer digest** — the value the blob store
+    /// verifies on pull — not the manifest's `diff_id`, which is untrusted until
+    /// the tar is decompressed. Keying on the verified digest means a lying
+    /// `diff_id` cannot make one image's build reuse another's cached erofs (the
+    /// trade-off is no cross-codec dedup, which umf doesn't rely on). A base
+    /// layer shared across images still resolves to one erofs file.
+    /// `layer_digest` must be in spec form `sha256:hex`.
+    pub fn erofs_cache_path(&self, layer_digest: &str) -> Result<PathBuf, RegistryError> {
+        let (_algo, hex) = split_digest(layer_digest)?;
         Ok(self
             .root
             .join(CACHE_DIR)

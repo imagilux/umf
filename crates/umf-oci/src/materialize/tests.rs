@@ -282,3 +282,27 @@ fn whiteout_through_symlink_does_not_escape_target() {
         "opaque marker escaped: host dir contents were cleared"
     );
 }
+
+#[test]
+fn capped_reader_allows_up_to_cap_then_errors() {
+    use std::io::Read as _;
+    // A reader of 100 bytes behind a 64-byte cap: reads succeed until the cap,
+    // then error (a decompression bomb is aborted mid-stream).
+    let data = [0u8; 100];
+    let mut r = CappedReader::new(&data[..], 64);
+    let mut sink = Vec::new();
+    let err = r.read_to_end(&mut sink).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("decompression bomb"));
+}
+
+#[test]
+fn capped_reader_passes_a_stream_at_exactly_the_cap() {
+    use std::io::Read as _;
+    let data = [7u8; 64];
+    let mut r = CappedReader::new(&data[..], 64);
+    let mut sink = Vec::new();
+    // Exactly `cap` bytes read cleanly to EOF, no false bomb error.
+    assert_eq!(r.read_to_end(&mut sink).unwrap(), 64);
+    assert_eq!(sink, &data[..]);
+}
