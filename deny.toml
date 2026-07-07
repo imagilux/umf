@@ -72,6 +72,10 @@ allow-git = []
 # ---- Security advisories -----------------------------------------------------
 
 [advisories]
+# Fail CI on a yanked transitive dependency: a yank usually signals a pulled
+# release (broken build, security issue, or accidental publish), so a lockfile
+# pointing at one is a supply-chain smell worth blocking rather than warning on.
+yanked = "deny"
 ignore = [
     # paste v1.0.15 — unmaintained (RUSTSEC-2024-0436). Pulled in transitively
     # via `libcontainer` → `netlink-packet-core` → `paste`. It's a build-time

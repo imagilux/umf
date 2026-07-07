@@ -75,6 +75,9 @@ pub(super) fn apply_run(
     // still gets a cache hit.
     let mut bind_mounts: Vec<umf_engine::runtime::BindMount> = Vec::new();
     let mut referenced_secret_ids: Vec<String> = Vec::new();
+    // Container-side mount targets of the secrets, so their placeholder inodes
+    // can be scrubbed from the captured upper after the RUN (see below).
+    let mut secret_targets: Vec<PathBuf> = Vec::new();
     for mount in &run.mounts {
         match &mount.kind {
             umf_core::ast::RunMountKind::Secret { id, target } => {
@@ -87,6 +90,7 @@ pub(super) fn apply_run(
                     Some(t) => PathBuf::from(t.value.as_str()),
                     None => PathBuf::from(format!("/run/secrets/{id_str}")),
                 };
+                secret_targets.push(container_path.clone());
                 bind_mounts.push(umf_engine::runtime::BindMount {
                     host_path: host_path.to_path_buf(),
                     container_path,
@@ -170,10 +174,119 @@ pub(super) fn apply_run(
         });
     }
 
+    // Scrub secret bind-mount placeholders from the captured upper before it
+    // becomes a layer. The runtime creates a mountpoint inode (an empty file/
+    // dir) at each secret target, which persists in the upper once the mount is
+    // torn down. The secret *bytes* never touch the upper (they live behind the
+    // read-only bind mount), but the empty placeholder — and any `/run/secrets`
+    // tree created solely for it — must not ship in the emitted layer.
+    scrub_secret_mountpoints(overlay.upper(), &secret_targets);
+
     let upper = overlay.persist_upper()?;
     let layer = state.push_new_layer(upper, history_summary.clone())?;
     // Store unconditionally (even on a cache-lookups-disabled rebuild) so the
     // cache repopulates and the next identical build is an all-hit fast path.
     store_layer_cache(cache, &key, layer, history_summary)?;
     Ok(StepFlow::Continue)
+}
+
+/// Remove secret bind-mount placeholders from a captured upper-dir.
+///
+/// For each `container_path` target (mapped into `upper`), delete the mountpoint
+/// inode the runtime created, then walk up removing now-empty ancestor
+/// directories (so a `/run/secrets` created solely for the mount doesn't ship),
+/// stopping at the first non-empty directory or the upper root. Best-effort: a
+/// failure to remove a placeholder is not fatal (the value never reached the
+/// upper), so errors are ignored. A target with a `..` component is skipped
+/// rather than followed out of the upper.
+fn scrub_secret_mountpoints(upper: &Path, targets: &[PathBuf]) {
+    for target in targets {
+        let rel = target.strip_prefix("/").unwrap_or(target);
+        if rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            continue;
+        }
+        let in_upper = upper.join(rel);
+        match std::fs::symlink_metadata(&in_upper) {
+            Ok(m) if m.is_dir() => {
+                let _ = std::fs::remove_dir_all(&in_upper);
+            }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&in_upper);
+            }
+            Err(_) => continue,
+        }
+        // Prune now-empty ancestors up to (not including) the upper root.
+        let mut cursor = in_upper.parent().map(Path::to_path_buf);
+        while let Some(dir) = cursor {
+            if dir == upper || !dir.starts_with(upper) {
+                break;
+            }
+            let is_empty = match std::fs::read_dir(&dir) {
+                Ok(mut entries) => entries.next().is_none(),
+                Err(_) => false,
+            };
+            if !is_empty || std::fs::remove_dir(&dir).is_err() {
+                break;
+            }
+            cursor = dir.parent().map(Path::to_path_buf);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use super::scrub_secret_mountpoints;
+    use std::path::PathBuf;
+
+    #[test]
+    fn scrubs_placeholder_and_prunes_empty_run_secrets() {
+        let upper = tempfile::tempdir().unwrap();
+        // The empty mountpoint the runtime leaves behind: /run/secrets/token.
+        let secrets_dir = upper.path().join("run/secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        std::fs::write(secrets_dir.join("token"), b"").unwrap();
+
+        scrub_secret_mountpoints(upper.path(), &[PathBuf::from("/run/secrets/token")]);
+
+        assert!(!upper.path().join("run/secrets/token").exists());
+        assert!(!upper.path().join("run/secrets").exists());
+        assert!(!upper.path().join("run").exists(), "empty ancestor pruned");
+    }
+
+    #[test]
+    fn keeps_ancestor_with_other_content() {
+        let upper = tempfile::tempdir().unwrap();
+        let secrets_dir = upper.path().join("run/secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        std::fs::write(secrets_dir.join("token"), b"").unwrap();
+        // Something the RUN legitimately wrote under /run.
+        std::fs::write(upper.path().join("run/other"), b"keep").unwrap();
+
+        scrub_secret_mountpoints(upper.path(), &[PathBuf::from("/run/secrets/token")]);
+
+        assert!(
+            !upper.path().join("run/secrets").exists(),
+            "empty secrets dir pruned"
+        );
+        assert!(
+            upper.path().join("run/other").exists(),
+            "/run kept (has other content)"
+        );
+    }
+
+    #[test]
+    fn ignores_parent_traversal_targets() {
+        let upper = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        std::fs::write(&victim, b"x").unwrap();
+        // A `..`-bearing target must be skipped, never followed out of the upper.
+        scrub_secret_mountpoints(upper.path(), &[PathBuf::from("/../../victim")]);
+        assert!(victim.exists(), "traversal target must not be touched");
+    }
 }
