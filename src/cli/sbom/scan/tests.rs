@@ -99,3 +99,58 @@ fn scan_rootfs_with_no_package_db_is_empty_not_an_error() {
     assert!(inv.packages.is_empty());
     assert!(inv.os_id.is_none());
 }
+
+#[test]
+fn scan_rootfs_refuses_to_read_a_db_symlink_escaping_the_rootfs() {
+    // A hostile layer plants `var/lib/dpkg/status` as a symlink to a host file
+    // (here a secret outside the rootfs). The scanner must NOT follow it — else
+    // the host file's bytes land in the SBOM.
+    let root = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let secret = outside.path().join("shadow");
+    std::fs::write(&secret, "root:$6$hostsecret:0:0\n").unwrap();
+
+    std::fs::create_dir_all(root.path().join("var/lib/dpkg")).unwrap();
+    std::os::unix::fs::symlink(&secret, root.path().join("var/lib/dpkg/status")).unwrap();
+    // Also point os-release off-rootfs to be thorough.
+    std::fs::create_dir_all(root.path().join("etc")).unwrap();
+    std::os::unix::fs::symlink(&secret, root.path().join("etc/os-release")).unwrap();
+
+    let inv = scan_rootfs(root.path()).unwrap();
+    // The escaping db is treated as absent: no packages, no os-id leaked.
+    assert!(
+        inv.packages.is_empty(),
+        "escaping db symlink must not be read"
+    );
+    assert!(
+        inv.os_id.is_none(),
+        "escaping os-release symlink must not be read"
+    );
+}
+
+#[test]
+fn scan_rootfs_follows_an_internal_db_symlink() {
+    // An internal symlink whose target stays inside the rootfs is legitimate
+    // (e.g. a distro layout) and must still be read.
+    let root = TempDir::new().unwrap();
+    std::fs::create_dir_all(root.path().join("var/lib/dpkg")).unwrap();
+    std::fs::create_dir_all(root.path().join("real")).unwrap();
+    std::fs::write(
+        root.path().join("real/status"),
+        "Package: bash\nStatus: install ok installed\nVersion: 5.1-2\nArchitecture: amd64\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        root.path().join("real/status"),
+        root.path().join("var/lib/dpkg/status"),
+    )
+    .unwrap();
+
+    let inv = scan_rootfs(root.path()).unwrap();
+    let names: Vec<_> = inv.packages.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["bash"],
+        "internal symlink is followed within the rootfs"
+    );
+}

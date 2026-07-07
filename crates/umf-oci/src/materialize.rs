@@ -52,6 +52,26 @@ pub enum MaterializeError {
     Io(#[from] io::Error),
 }
 
+/// Resolve `path` (expected to sit under `root`) to a real path **inside**
+/// `root`, refusing any symlink that escapes it. Returns `None` if the path
+/// doesn't exist or resolves outside `root`.
+///
+/// A materialized rootfs comes from an untrusted image: a layer can plant a
+/// symlink at a well-known location (`var/lib/dpkg/status -> /etc/shadow`) whose
+/// placement passes tar's traversal guard but whose target points at a host
+/// file. A reader that does `root.join(...)` + `File::open` would follow it off
+/// the rootfs. This canonicalizes (resolving every symlink, requiring
+/// existence) and confirms the result is a prefix of the canonical `root`, so a
+/// caller scanning untrusted content treats an escaping symlink as "absent"
+/// instead of reading a host file. An *internal* symlink that stays under `root`
+/// is allowed.
+#[must_use]
+pub fn contained_read(root: &Path, path: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    let root_canonical = root.canonicalize().ok()?;
+    canonical.starts_with(&root_canonical).then_some(canonical)
+}
+
 /// Apply each layer of `layer_digests` (in order) onto `target`, producing the
 /// merged rootfs. Each digest names a (possibly gzipped) tar blob in `layout`.
 /// Whiteouts are honoured, so deletions in upper layers remove files
