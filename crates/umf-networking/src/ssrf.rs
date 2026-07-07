@@ -93,6 +93,21 @@ impl AddressCategory {
             AddressCategory::Cgnat => "cgnat",
         }
     }
+
+    /// The IPv4 CIDR prefixes for this category, as nft-expressible strings.
+    /// Empty for a v6-only category (`ula`). Kept consistent with [`classify`].
+    #[must_use]
+    pub const fn v4_cidrs(self) -> &'static [&'static str] {
+        match self {
+            // `0.0.0.0` is folded into loopback by classify, but as a routed
+            // destination it is meaningless, so only 127/8 is listed here.
+            AddressCategory::Loopback => &["127.0.0.0/8"],
+            AddressCategory::LinkLocal => &["169.254.0.0/16"],
+            AddressCategory::Rfc1918 => &["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+            AddressCategory::UniqueLocal => &[],
+            AddressCategory::Cgnat => &["100.64.0.0/10"],
+        }
+    }
 }
 
 impl fmt::Display for AddressCategory {
@@ -305,6 +320,18 @@ impl EgressPolicy {
     #[must_use]
     pub fn denies(&self, category: AddressCategory) -> bool {
         self.denied.contains(&category)
+    }
+
+    /// The IPv4 CIDRs this policy denies, flattened across every denied
+    /// category — the `ip daddr` match set for the rootful NAT path's forward
+    /// drop chain. Empty when the operator has re-allowed every category.
+    #[must_use]
+    pub fn denied_v4_cidrs(&self) -> Vec<&'static str> {
+        AddressCategory::ALL
+            .into_iter()
+            .filter(|cat| self.denied.contains(cat))
+            .flat_map(|cat| cat.v4_cidrs().iter().copied())
+            .collect()
     }
 
     /// Decide whether a connection to `ip` is allowed. A public address (one
