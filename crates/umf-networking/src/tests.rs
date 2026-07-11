@@ -40,10 +40,10 @@ fn forward_restore_target_only_reverts_when_we_enabled_it() {
 }
 
 #[test]
-fn ip_plan_carves_distinct_30s_per_pid() {
+fn ip_plan_carves_distinct_30s_per_block() {
     let base = Ipv4Addr::new(10, 69, 0, 0);
-    let a = IpPlan::for_pid(base, 1);
-    let b = IpPlan::for_pid(base, 2);
+    let a = IpPlan::for_block(base, 1);
+    let b = IpPlan::for_block(base, 2);
 
     // /30 layout: .0 network, .1 host, .2 container, .3 broadcast.
     assert_eq!(a.network, Ipv4Addr::new(10, 69, 0, 4));
@@ -51,7 +51,7 @@ fn ip_plan_carves_distinct_30s_per_pid() {
     assert_eq!(a.container, Ipv4Addr::new(10, 69, 0, 6));
     assert_eq!(a.prefix, 30);
     assert_eq!(a.cidr(), "10.69.0.4/30");
-    // Distinct pids land in distinct /30s.
+    // Distinct blocks land in distinct /30s.
     assert_ne!(a.network, b.network);
     assert_eq!(b.host, Ipv4Addr::new(10, 69, 0, 9));
 }
@@ -59,11 +59,22 @@ fn ip_plan_carves_distinct_30s_per_pid() {
 #[test]
 fn ip_plan_wraps_within_the_16_base() {
     let base = Ipv4Addr::new(10, 69, 0, 0);
-    // pid 0 → block 0 (.0 network, .1 host, .2 container); host stays in 10.69/16.
-    let p = IpPlan::for_pid(base, 0);
+    // block 0 → .0 network, .1 host, .2 container; host stays in 10.69/16.
+    let p = IpPlan::for_block(base, 0);
     assert_eq!(p.network, Ipv4Addr::new(10, 69, 0, 0));
     assert_eq!(p.cidr(), "10.69.0.0/30");
     assert!(p.host.octets()[0] == 10 && p.host.octets()[1] == 69);
+}
+
+#[test]
+fn ip_plan_top_block_stays_inside_the_16() {
+    // The last block (SUBNET_BLOCKS-1) must not overflow the /16: its network is
+    // 10.69.255.252/30, broadcast .255 — still within 10.69.0.0/16.
+    let base = Ipv4Addr::new(10, 69, 0, 0);
+    let top = IpPlan::for_block(base, (SUBNET_BLOCKS - 1) as u16);
+    assert_eq!(top.network, Ipv4Addr::new(10, 69, 255, 252));
+    assert_eq!(top.container, Ipv4Addr::new(10, 69, 255, 254));
+    assert!(top.host.octets()[0] == 10 && top.host.octets()[1] == 69);
 }
 
 #[test]

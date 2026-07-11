@@ -67,6 +67,15 @@ pub enum NetError {
     /// address category.
     #[error("egress policy: {0}")]
     EgressPolicy(String),
+    /// The host veth for a candidate subnet block already exists — another
+    /// concurrent build owns it. Internal signal driving [`ContainerNet::setup`]
+    /// to try the next block; never surfaced to callers.
+    #[error("subnet block already in use")]
+    LinkExists,
+    /// Every subnet block in the `/16` pool is in use — more than 16384
+    /// concurrent container builds, which is not a real workload.
+    #[error("no free /30 subnet block available (>16384 concurrent builds)")]
+    NoFreeSubnet,
 }
 
 /// Fallback MTU when the host egress MTU can't be determined: the classic
@@ -160,15 +169,30 @@ impl ContainerNet {
     /// # Errors
     /// [`NetError`] if any netlink / netns / nftables step fails.
     pub fn setup(pid: u32, opts: &NetOptions) -> Result<Self, NetError> {
-        let plan = IpPlan::for_pid(opts.subnet_base, pid);
+        let base = opts.subnet_base;
         let mtu = opts.mtu;
-        // Run on a dedicated OS thread. umf's CLI runs under `#[tokio::main]`,
-        // and calling `Runtime::block_on` from within an existing runtime's
-        // worker thread panics ("Cannot start a runtime from within a
-        // runtime"). A freshly-spawned thread carries no runtime in its
-        // thread-local context, so the netlink `block_on`s below are valid no
-        // matter whether the caller is sync or already inside a runtime.
-        run_off_runtime(move || setup_inner(pid, plan, mtu))
+        // Allocate a free `/30` block by *claiming its veth*: the kernel refuses
+        // a duplicate interface name (EEXIST), so `veth add` is an atomic,
+        // cross-process claim. Start at `pid % 16384` to spread load, then walk
+        // the pool skipping blocks another build already owns — replacing the old
+        // bare `pid % 16384`, which collided for PIDs differing by a multiple of
+        // 16384. Each attempt runs on a dedicated OS thread (see below).
+        let start = (pid % SUBNET_BLOCKS) as u16;
+        for offset in 0..SUBNET_BLOCKS {
+            let block = ((u32::from(start) + offset) % SUBNET_BLOCKS) as u16;
+            // Run on a dedicated OS thread. umf's CLI runs under `#[tokio::main]`,
+            // and calling `Runtime::block_on` from within an existing runtime's
+            // worker thread panics. A freshly-spawned thread carries no runtime in
+            // its thread-local context, so the netlink `block_on`s are valid no
+            // matter whether the caller is sync or already inside a runtime.
+            match run_off_runtime(move || setup_inner(pid, base, block, mtu)) {
+                Ok(net) => return Ok(net),
+                // Lost the race (or the block was taken): try the next one.
+                Err(NetError::LinkExists) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(NetError::NoFreeSubnet)
     }
 
     /// The address assigned to the container end of the link.
@@ -184,11 +208,19 @@ impl ContainerNet {
     }
 }
 
-/// Body of [`ContainerNet::setup`], run on a runtime-free thread.
-fn setup_inner(pid: u32, plan: IpPlan, mtu: u32) -> Result<ContainerNet, NetError> {
-    let host_if = format!("umfv{pid}h");
-    let ctr_if = format!("umfv{pid}c");
-    let nft_table = format!("umf-nat-{pid}");
+/// Number of `/30` blocks carved from the `/16` subnet pool (`65536 / 4`).
+const SUBNET_BLOCKS: u32 = 16_384;
+
+/// Body of [`ContainerNet::setup`] for one candidate `block`, run on a
+/// runtime-free thread. Resource names derive from the block (not the PID) so a
+/// live veth is the block's cross-process lease; `pid` is still used to enter
+/// the container's netns. Returns [`NetError::LinkExists`] if the block's veth
+/// is already taken, so the caller can try the next block.
+fn setup_inner(pid: u32, base: Ipv4Addr, block: u16, mtu: u32) -> Result<ContainerNet, NetError> {
+    let host_if = format!("umfv{block}h");
+    let ctr_if = format!("umfv{block}c");
+    let nft_table = format!("umf-nat-{block}");
+    let plan = IpPlan::for_block(base, block);
 
     // Egress SSRF policy: deny host-internal destinations by default (cloud
     // metadata, RFC1918, loopback, CGNAT), re-openable via UMF_ROOTLESS_NET_ALLOW
@@ -223,9 +255,7 @@ fn setup_inner(pid: u32, plan: IpPlan, mtu: u32) -> Result<ContainerNet, NetErro
         }
         Err((err, prior_ip_forward)) => {
             let _ = del_masquerade(&nft_table);
-            if let Some(prior) = prior_ip_forward {
-                let _ = std::fs::write(IP_FORWARD, prior.as_bytes());
-            }
+            restore_ip_forward(prior_ip_forward.as_deref());
             let _ = rt.block_on(del_link(&host_if));
             Err(err)
         }
@@ -270,15 +300,11 @@ impl Drop for ContainerNet {
                     warn!(link = %host, error = %e, "umf-networking: veth teardown failed");
                 }
             }
-            // Restore the host's IPv4-forwarding posture if WE turned it on.
-            // Caveat: with concurrent umf builds the last teardown wins, which
-            // could briefly disable forwarding for a still-running build; builds
-            // are short-lived and the per-container NAT table scopes egress.
-            if let Some(prior) = prior_forward
-                && let Err(e) = std::fs::write(IP_FORWARD, prior.as_bytes())
-            {
-                warn!(error = %e, "umf-networking: ip_forward restore failed");
-            }
+            // Restore the host's IPv4-forwarding posture if WE turned it on —
+            // but only once no other umf build's NAT table remains (our own is
+            // already deleted above), so the last teardown can't disable
+            // forwarding out from under a still-running concurrent build.
+            restore_ip_forward(prior_forward.as_deref());
         })
         .join();
     }
@@ -307,16 +333,17 @@ struct IpPlan {
 }
 
 impl IpPlan {
-    /// Carve a `/30` out of `base/16`, indexed by `pid` so concurrent builds
-    /// get distinct subnets (collisions only past 16384 simultaneous builds).
-    fn for_pid(base: Ipv4Addr, pid: u32) -> Self {
+    /// Carve the `/30` at index `block` (0..[`SUBNET_BLOCKS`)) out of `base/16`.
+    /// The block index is allocated collision-free by [`ContainerNet::setup`],
+    /// so distinct concurrent builds always get distinct subnets.
+    fn for_block(base: Ipv4Addr, block: u16) -> Self {
         let o = base.octets();
         let base16 = u32::from_be_bytes([o[0], o[1], 0, 0]);
-        let block = base16 + (pid % 16_384) * 4;
+        let net = base16 + u32::from(block) * 4;
         Self {
-            network: Ipv4Addr::from(block),
-            host: Ipv4Addr::from(block + 1),
-            container: Ipv4Addr::from(block + 2),
+            network: Ipv4Addr::from(net),
+            host: Ipv4Addr::from(net + 1),
+            container: Ipv4Addr::from(net + 2),
             prefix: 30,
         }
     }
@@ -364,13 +391,24 @@ async fn setup_host_side(
     // std's IO-safety double-close guard (SIGABRT).
     let _conn = tokio::spawn(conn);
 
-    handle
+    // The veth pair is the atomic block claim: a duplicate interface name is
+    // refused by the kernel with EEXIST, which we surface as `LinkExists` so the
+    // caller advances to the next block rather than failing the build.
+    match handle
         .link()
         .add()
         .veth(host_if.to_string(), ctr_if.to_string())
         .execute()
         .await
-        .map_err(nl)?;
+    {
+        Ok(()) => {}
+        Err(rtnetlink::Error::NetlinkError(msg))
+            if msg.to_io().raw_os_error() == Some(nix::libc::EEXIST) =>
+        {
+            return Err(NetError::LinkExists);
+        }
+        Err(e) => return Err(nl(e)),
+    }
 
     let host_idx = link_index(&handle, host_if).await?;
     let ctr_idx = link_index(&handle, ctr_if).await?;
@@ -482,6 +520,36 @@ fn enable_ipv4_forwarding() -> Result<Option<String>, NetError> {
     let prior = std::fs::read_to_string(IP_FORWARD).ok();
     std::fs::write(IP_FORWARD, b"1")?;
     Ok(forward_restore_target(prior.as_deref().map(str::trim)))
+}
+
+/// Restore `ip_forward` to `prior` (the value before we enabled forwarding),
+/// but only when no other umf NAT table remains — a concurrent build still needs
+/// forwarding on, so the last teardown must not disable it out from under it.
+/// The per-container `umf-nat-*` tables are the cross-process refcount (ours is
+/// deleted before this runs). `prior` is `None` when we didn't flip it (no-op).
+fn restore_ip_forward(prior: Option<&str>) {
+    let Some(prior) = prior else { return };
+    if umf_nat_table_present() {
+        debug!("umf-networking: leaving ip_forward on; another umf NAT table is active");
+        return;
+    }
+    if let Err(e) = std::fs::write(IP_FORWARD, prior.as_bytes()) {
+        warn!(error = %e, "umf-networking: ip_forward restore failed");
+    }
+}
+
+/// Whether any `umf-nat-*` nftables table currently exists — i.e. another umf
+/// build is mid-flight and still needs host forwarding. Best-effort: on any
+/// `nft` failure it assumes one *is* present (fail toward leaving forwarding on,
+/// the benign state), so a flaky `nft` never disables forwarding under a peer.
+fn umf_nat_table_present() -> bool {
+    let Ok(out) = Command::new("nft").args(["list", "tables"]).output() else {
+        return true;
+    };
+    if !out.status.success() {
+        return true;
+    }
+    String::from_utf8_lossy(&out.stdout).contains("umf-nat-")
 }
 
 /// Decide what `ip_forward` value to restore on teardown, given the value read
