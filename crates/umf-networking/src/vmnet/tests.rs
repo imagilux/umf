@@ -36,11 +36,13 @@ fn vmfwd_ruleset_has_dnat_per_forward_and_a_guest_forward_chain() {
     let plan = VmIpPlan::for_id(0);
     let forwards = [
         PortForward {
+            bind_addr: None,
             host_port: 8080,
             guest_port: 80,
             tcp: true,
         },
         PortForward {
+            bind_addr: None,
             host_port: 5353,
             guest_port: 53,
             tcp: false,
@@ -51,6 +53,7 @@ fn vmfwd_ruleset_has_dnat_per_forward_and_a_guest_forward_chain() {
     assert!(rs.contains("table inet umf-vmfwd-0"));
     assert!(rs.contains("type nat hook prerouting priority dstnat"));
     // One DNAT rule per forward, targeting the guest .2 with the right proto.
+    // No bind address → no `ip daddr` qualifier (binds all interfaces).
     assert!(
         rs.contains("tcp dport 8080 dnat ip to 10.70.0.2:80"),
         "{rs}"
@@ -63,6 +66,24 @@ fn vmfwd_ruleset_has_dnat_per_forward_and_a_guest_forward_chain() {
     assert!(rs.contains("type filter hook forward priority filter"));
     assert!(rs.contains("ip daddr 10.70.0.2 accept"));
     assert!(rs.contains("ip saddr 10.70.0.2 accept"));
+}
+
+#[test]
+fn vmfwd_ruleset_scopes_dnat_to_the_bind_address() {
+    let plan = VmIpPlan::for_id(0);
+    let forwards = [PortForward {
+        bind_addr: Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+        host_port: 8080,
+        guest_port: 80,
+        tcp: true,
+    }];
+    let rs = vmfwd_ruleset("umf-vmfwd-0", plan, &forwards);
+    // The DNAT is qualified with the bind address, so it only matches traffic
+    // destined for 127.0.0.1 (not every host interface).
+    assert!(
+        rs.contains("ip daddr 127.0.0.1 tcp dport 8080 dnat ip to 10.70.0.2:80"),
+        "{rs}"
+    );
 }
 
 #[test]

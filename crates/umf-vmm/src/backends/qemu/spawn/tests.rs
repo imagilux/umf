@@ -75,22 +75,37 @@ fn port_forward_becomes_netdev_hostfwd() {
     let mut spec = base_spec();
     spec.port_forwards = vec![
         PortForward {
+            bind_addr: None,
             host_port: 8080,
             guest_port: 80,
             tcp: true,
         },
         PortForward {
+            bind_addr: None,
             host_port: 5353,
             guest_port: 53,
             tcp: false,
+        },
+        // A bind address scopes the hostfwd to that host interface.
+        PortForward {
+            bind_addr: Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            host_port: 9090,
+            guest_port: 90,
+            tcp: true,
         },
     ];
     let args = build_qemu_args(&spec, None, "test");
     let netdev_idx = args.iter().position(|a| a == "-netdev").expect("netdev");
     let netdev_val = &args[netdev_idx + 1];
     assert!(netdev_val.contains("user,id=net0"));
+    // No bind → empty hostaddr (binds all interfaces).
     assert!(netdev_val.contains("hostfwd=tcp::8080-:80"));
     assert!(netdev_val.contains("hostfwd=udp::5353-:53"));
+    // Bind → hostaddr filled.
+    assert!(
+        netdev_val.contains("hostfwd=tcp:127.0.0.1:9090-:90"),
+        "{netdev_val}"
+    );
 }
 
 #[test]

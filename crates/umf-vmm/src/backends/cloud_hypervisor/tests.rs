@@ -130,6 +130,7 @@ fn build_vm_config_rejects_port_forwards_without_a_tap_net() {
             firmware: Some(Firmware::Bios(PathBuf::from("/fw"))),
         },
         port_forwards: vec![crate::runtime::PortForward {
+            bind_addr: None,
             host_port: 8080,
             guest_port: 80,
             tcp: true,

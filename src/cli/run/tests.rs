@@ -147,3 +147,43 @@ fn dhcp_command_flag_maps_to_daemon() {
         other => panic!("expected Custom argv, got {other:?}"),
     }
 }
+
+#[test]
+fn parse_port_forward_plain_host_guest() {
+    let pf = parse_port_forward("8080:80").expect("parses");
+    assert_eq!(pf.bind_addr, None);
+    assert_eq!((pf.host_port, pf.guest_port, pf.tcp), (8080, 80, true));
+}
+
+#[test]
+fn parse_port_forward_proto_and_bind() {
+    let udp = parse_port_forward("5353:53/udp").expect("parses");
+    assert_eq!(udp.bind_addr, None);
+    assert!(!udp.tcp);
+
+    let bound = parse_port_forward("127.0.0.1:8080:80").expect("parses");
+    assert_eq!(bound.bind_addr, Some(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(
+        (bound.host_port, bound.guest_port, bound.tcp),
+        (8080, 80, true)
+    );
+
+    let bound_udp = parse_port_forward("10.0.0.5:9090:90/udp").expect("parses");
+    assert_eq!(
+        bound_udp.bind_addr,
+        Some(std::net::Ipv4Addr::new(10, 0, 0, 5))
+    );
+    assert!(!bound_udp.tcp);
+}
+
+#[test]
+fn parse_port_forward_rejects_bad_specs() {
+    // Missing guest.
+    assert!(parse_port_forward("8080").is_err());
+    // Non-numeric port.
+    assert!(parse_port_forward("http:80").is_err());
+    // Bad bind address.
+    assert!(parse_port_forward("999.0.0.1:8080:80").is_err());
+    // Too many fields.
+    assert!(parse_port_forward("1.2.3.4:8080:80:70").is_err());
+}
