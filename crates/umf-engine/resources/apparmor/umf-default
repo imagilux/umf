@@ -1,0 +1,55 @@
+# umf-default — AppArmor profile for UMF container RUN steps.
+#
+# A defence-in-depth backstop layered on top of umf's seccomp filter,
+# capability set, user namespace and masked/read-only paths. It is intentionally
+# permissive for ordinary build work (file I/O, networking, package installs) —
+# modelled on the containerd/Docker default profile — and only denies the
+# clearly-dangerous operations that the finer sandbox layers also cover, so it
+# does not break normal builds.
+#
+# NOT loaded automatically by umf (loading needs init-userns privilege). Load it
+# on the host, then umf detects and applies it to every RUN step:
+#
+#     sudo apparmor_parser -r -W crates/umf-engine/resources/apparmor/umf-default
+#
+# Override the profile umf looks for with UMF_APPARMOR_PROFILE=<name>, or set it
+# to `unconfined` to disable AppArmor confinement.
+
+#include <tunables/global>
+
+profile umf-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Permissive baseline: ordinary build tooling needs broad file, network and
+  # capability access. The dangerous tail is denied below (and, independently,
+  # by seccomp + the dropped capability set + masked paths).
+  network,
+  capability,
+  file,
+  umount,
+
+  # Deny writes to the host-sensitive /proc surface (also masked/read-only in
+  # the runtime spec; belt and suspenders).
+  deny @{PROC}/* w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+  deny @{PROC}/kmem rwklx,
+  deny @{PROC}/mem rwklx,
+
+  # Deny mounting (RUN steps never need to mount) and tampering with the kernel
+  # security / firmware surfaces.
+  deny mount,
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # ptrace only within the same profile — no reaching out to host processes.
+  ptrace (trace,read,tracedby,readby) peer=umf-default,
+  signal (receive,send) peer=umf-default,
+}
