@@ -163,6 +163,10 @@ pub enum ControlMode {
 /// One host:guest port forward (user-mode networking).
 #[derive(Debug, Clone, Copy)]
 pub struct PortForward {
+    /// Host address to bind the forward to. `None` binds all interfaces;
+    /// `Some(addr)` restricts it (QEMU `hostfwd=<proto>:<addr>:<host>-:<guest>`),
+    /// matching `docker -p <addr>:<host>:<guest>`.
+    pub bind_addr: Option<std::net::Ipv4Addr>,
     /// Port on the host the VMM should bind. `0` ⇒ kernel picks.
     pub host_port: u16,
     /// Port inside the guest the host port maps to.

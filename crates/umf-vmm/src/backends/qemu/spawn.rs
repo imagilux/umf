@@ -291,8 +291,15 @@ pub(crate) fn build_qemu_args(spec: &VmSpec, qmp_socket: Option<&Path>, id: &str
 
 fn format_hostfwd(pf: PortForward) -> String {
     let proto = if pf.tcp { "tcp" } else { "udp" };
+    // QEMU hostfwd is `<proto>:[hostaddr]:hostport-[guestaddr]:guestport`; an
+    // empty hostaddr binds all interfaces. Fill it when the operator scoped the
+    // forward to a bind address.
+    let host_addr = match pf.bind_addr {
+        Some(addr) => addr.to_string(),
+        None => String::new(),
+    };
     format!(
-        ",hostfwd={proto}::{host}-:{guest}",
+        ",hostfwd={proto}:{host_addr}:{host}-:{guest}",
         host = pf.host_port,
         guest = pf.guest_port,
     )

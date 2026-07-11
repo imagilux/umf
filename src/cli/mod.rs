@@ -285,10 +285,10 @@ enum Command {
         /// VM boot: guest vCPU count. Default 2.
         #[arg(long, value_name = "N")]
         cpus: Option<u32>,
-        /// VM boot: host:guest port forward (e.g. `8080:80` or
-        /// `8080:80/udp`). Implemented via user-mode networking;
-        /// repeatable.
-        #[arg(short = 'p', long = "port-forward", value_name = "HOST:GUEST")]
+        /// VM boot: `[bind:]host:guest[/proto]` port forward (e.g. `8080:80`,
+        /// `8080:80/udp`, or `127.0.0.1:8080:80` to bind one host address
+        /// instead of all interfaces). Repeatable.
+        #[arg(short = 'p', long = "port-forward", value_name = "[BIND:]HOST:GUEST")]
         port_forwards: Vec<String>,
         /// VM boot (`--vmm ch` port-forwarding): the DHCP daemon run inside the
         /// VM's network namespace to lease the guest. Default `dnsmasq`; `none`

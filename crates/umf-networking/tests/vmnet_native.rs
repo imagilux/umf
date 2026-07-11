@@ -60,6 +60,7 @@ fn native_vmnet_sets_up_and_tears_down_leak_free() {
     let tap = format!("umftap{id}");
     let table = format!("umf-vmfwd-{id}");
     let forwards = [PortForward {
+        bind_addr: None,
         host_port: 18080,
         guest_port: 80,
         tcp: true,

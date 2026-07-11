@@ -2,6 +2,7 @@
 //! run via the linked-in libcontainer runtime; VM artifacts dispatch
 //! to a `umf-vmm` backend (`--vmm=qemu|ch` + `--disk`).
 
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use oci_client::Reference;
@@ -265,6 +266,7 @@ fn run_vm(
             .port_forwards
             .iter()
             .map(|p| umf_networking::PortForward {
+                bind_addr: p.bind_addr,
                 host_port: p.host_port,
                 guest_port: p.guest_port,
                 tcp: p.tcp,
@@ -525,35 +527,46 @@ fn firmware_install_hint(arch: VmArch) -> String {
     }
 }
 
-/// Parse `host:guest` or `host:guest/proto` (proto in {tcp, udp},
-/// default tcp). Returns a `umf_vmm::PortForward`.
+/// Parse `[bind:]host:guest[/proto]` (proto in {tcp, udp}, default tcp).
+/// An optional leading IPv4 `bind` address scopes the forward to that host
+/// address (like `docker -p 127.0.0.1:8080:80`); omitted, it binds all
+/// interfaces. Returns a `umf_vmm::PortForward`.
 fn parse_port_forward(spec: &str) -> Result<umf_vmm::PortForward, CliRunError> {
-    let (pair, tcp) = if let Some(stripped) = spec.strip_suffix("/tcp") {
+    let (rest, tcp) = if let Some(stripped) = spec.strip_suffix("/tcp") {
         (stripped, true)
     } else if let Some(stripped) = spec.strip_suffix("/udp") {
         (stripped, false)
     } else {
         (spec, true)
     };
-    let (host_s, guest_s) = pair
-        .split_once(':')
-        .ok_or_else(|| CliRunError::BadPortForward {
-            spec: spec.to_string(),
-            reason: "expected `host:guest`".into(),
-        })?;
+    let bad = |reason: String| CliRunError::BadPortForward {
+        spec: spec.to_string(),
+        reason,
+    };
+    // 2 fields = `host:guest`; 3 = `bind:host:guest`.
+    let fields: Vec<&str> = rest.split(':').collect();
+    let (bind_addr, host_s, guest_s) = match fields.as_slice() {
+        [host, guest] => (None, *host, *guest),
+        [bind, host, guest] => {
+            let addr = bind
+                .parse::<Ipv4Addr>()
+                .map_err(|e| bad(format!("bind address `{bind}`: {e}")))?;
+            (Some(addr), *host, *guest)
+        }
+        _ => {
+            return Err(bad(
+                "expected `host:guest` or `bind:host:guest` (optionally `/tcp` or `/udp`)".into(),
+            ));
+        }
+    };
     let host_port = host_s
         .parse::<u16>()
-        .map_err(|e| CliRunError::BadPortForward {
-            spec: spec.to_string(),
-            reason: format!("host port: {e}"),
-        })?;
+        .map_err(|e| bad(format!("host port: {e}")))?;
     let guest_port = guest_s
         .parse::<u16>()
-        .map_err(|e| CliRunError::BadPortForward {
-            spec: spec.to_string(),
-            reason: format!("guest port: {e}"),
-        })?;
+        .map_err(|e| bad(format!("guest port: {e}")))?;
     Ok(umf_vmm::PortForward {
+        bind_addr,
         host_port,
         guest_port,
         tcp,

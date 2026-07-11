@@ -60,6 +60,10 @@ use crate::{
 /// (`umf run`) maps `umf-vmm`'s `PortForward` onto this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortForward {
+    /// Host address the forward is scoped to. `None` publishes on **all** host
+    /// interfaces (the historical behaviour); `Some(addr)` restricts the DNAT to
+    /// traffic destined for `addr`, matching `docker -p 127.0.0.1:8080:80`.
+    pub bind_addr: Option<Ipv4Addr>,
     /// Port the host listens on.
     pub host_port: u16,
     /// Port inside the guest the traffic is DNAT'd to.
@@ -117,8 +121,15 @@ pub(crate) fn vmfwd_ruleset(table: &str, plan: VmIpPlan, forwards: &[PortForward
         .iter()
         .map(|pf| {
             let proto = if pf.tcp { "tcp" } else { "udp" };
+            // Scope to the bind address when the operator gave one, so the
+            // forward isn't reachable via every host interface (least surprise
+            // vs `docker -p 127.0.0.1:8080:80`). `None` ⇒ any destination.
+            let daddr = match pf.bind_addr {
+                Some(addr) => format!("ip daddr {addr} "),
+                None => String::new(),
+            };
             format!(
-                "    {proto} dport {hp} dnat ip to {guest}:{gp}\n",
+                "    {daddr}{proto} dport {hp} dnat ip to {guest}:{gp}\n",
                 hp = pf.host_port,
                 gp = pf.guest_port,
             )
