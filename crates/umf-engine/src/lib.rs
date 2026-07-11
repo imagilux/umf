@@ -56,6 +56,7 @@ mod env;
 pub mod erofs;
 pub mod error;
 pub mod hooks;
+pub mod lsm;
 mod mount_util;
 pub mod overlay;
 pub mod rootless;

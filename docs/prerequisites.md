@@ -79,6 +79,27 @@ A **bootable** build (`FROM` a kernel artifact) runs its `RUN` steps in a micro-
 
 The **Cloud Hypervisor** backend (`--vmm=ch`) is an alternative to QEMU. For a raw `--disk` boot it requires an explicit `--firmware` path (the raw-disk path discovers no firmware); a bootable image run auto-discovers OVMF the same way QEMU does. Its `-p/--port-forward` is wired host-side (a per-VM netns + tap + nft DNAT, pure-Rust with no `iproute2`), so it additionally needs **`nft`** on `PATH`, plus **`dnsmasq`** for the default in-namespace DHCP (not required if you pass `--dhcp-command` to run your own DHCP daemon, or `--dhcp-command none`); `umf doctor` reports them. See [Known limitations](known-limitations.md).
 
+## Optional LSM confinement (AppArmor / SELinux)
+
+Not required. Container RUN steps are already contained by seccomp, a dropped
+capability set, a user namespace, and masked/read-only paths; an LSM profile is
+an extra defence-in-depth layer, applied only when the host provides one and
+skipped cleanly otherwise (so absence never breaks a build).
+
+- **AppArmor**: load the shipped profile once, and UMF applies it to every RUN
+  step automatically:
+
+  ```bash
+  sudo apparmor_parser -r -W crates/umf-engine/resources/apparmor/umf-default
+  ```
+
+  Point UMF at a different loaded profile with `UMF_APPARMOR_PROFILE=<name>`, or
+  set it to `unconfined` to disable. UMF does not load the profile itself
+  (loading needs init-namespace privilege).
+- **SELinux**: on an enforcing host, supply the process/mount labels with
+  `UMF_SELINUX_LABEL=<context>` and `UMF_SELINUX_MOUNT_LABEL=<context>`; they are
+  ignored on a non-enforcing host.
+
 ## Optional acceleration
 
 Not required for any build; it only makes **warm** rebuilds faster.

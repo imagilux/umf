@@ -669,16 +669,25 @@ fn build_runtime_spec(
         .build()
         .map_err(spec_build_error)?;
 
-    let process = ProcessBuilder::default()
+    // Optional LSM (AppArmor / SELinux) confinement — a defence-in-depth
+    // backstop applied only when the host supports it and a profile/label is
+    // available; otherwise every field is `None` and the spec is unchanged.
+    let lsm = crate::lsm::LsmConfig::detect();
+    let mut process_builder = ProcessBuilder::default()
         .terminal(false)
         .user(user)
         .args(args)
         .env(env)
         .cwd(cwd)
         .capabilities(capabilities)
-        .no_new_privileges(true)
-        .build()
-        .map_err(spec_build_error)?;
+        .no_new_privileges(true);
+    if let Some(profile) = lsm.apparmor_profile.clone() {
+        process_builder = process_builder.apparmor_profile(profile);
+    }
+    if let Some(label) = lsm.selinux_process_label.clone() {
+        process_builder = process_builder.selinux_label(label);
+    }
+    let process = process_builder.build().map_err(spec_build_error)?;
 
     let root = RootBuilder::default()
         .path(rootfs)
@@ -754,6 +763,11 @@ fn build_runtime_spec(
     // holds). Applied for both root and rootless builds. libcontainer enforces
     // it via its `libseccomp` feature (enabled in the workspace `Cargo.toml`).
     linux_builder = linux_builder.seccomp(seccomp_profile);
+
+    // SELinux mount label for the container rootfs (enforcing hosts only).
+    if let Some(label) = lsm.selinux_mount_label.clone() {
+        linux_builder = linux_builder.mount_label(label);
+    }
 
     let linux = linux_builder
         .namespaces(namespaces)
