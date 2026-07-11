@@ -38,11 +38,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Give the kernel a beat to materialise /proc/<pid>/ns/net.
     std::thread::sleep(std::time::Duration::from_millis(200));
 
+    // Captured from the live network before teardown so the post-drop
+    // assertions check the *actual* block-allocated names (the veth/table are
+    // named by the allocated subnet block, not the PID).
+    let mut observed: Option<(String, String)> = None;
     let result = (|| -> Result<(), Box<dyn Error>> {
         let net = ContainerNet::setup(pid, &NetOptions::default())?;
+        let host_if = net.host_ifname().to_string();
+        // The nft table mirrors the veth's block: `umfv{block}h` → `umf-nat-{block}`.
+        let block = host_if
+            .trim_start_matches("umfv")
+            .trim_end_matches('h')
+            .to_string();
+        observed = Some((host_if.clone(), format!("umf-nat-{block}")));
         println!(
             "[*] setup ok: host_if={} container_ip={}",
-            net.host_ifname(),
+            host_if,
             net.container_ip()
         );
 
@@ -122,15 +133,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     result?;
 
-    // Teardown assertions: host veth + nft table must be gone.
-    let host_if = format!("umfv{pid}h");
+    // Teardown assertions: the host veth + nft table (the real block-named
+    // ones captured at setup) must be gone.
+    let (host_if, table) = observed.ok_or("setup never ran")?;
     let link = Command::new("ip")
         .args(["link", "show", &host_if])
         .output()?;
     if link.status.success() {
         return Err(format!("teardown leaked host veth {host_if}").into());
     }
-    let table = format!("umf-nat-{pid}");
     let nft = Command::new("nft")
         .args(["list", "table", "inet", &table])
         .output()?;
