@@ -15,7 +15,7 @@
 # On success it prints a single confirmation line and nothing else.
 #
 # Environment overrides (all optional):
-#   UMF_VERSION       release tag to install (default: latest, e.g. v2.7.0)
+#   UMF_VERSION       release tag to install (default: latest, e.g. v0.0.1)
 #   UMF_LIBC          gnu | musl                (default: auto-detected)
 #   UMF_INSTALL_DIR   directory to install into (default: see above)
 #
@@ -112,7 +112,7 @@ resolve_version() {
 			tail -n 1
 	)
 	[ -n "$tag" ] || die "could not determine the latest release tag; \
-set UMF_VERSION explicitly (e.g. UMF_VERSION=v2.7.0)"
+set UMF_VERSION explicitly (e.g. UMF_VERSION=v0.0.1)"
 	echo "$tag"
 }
 
