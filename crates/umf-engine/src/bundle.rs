@@ -943,28 +943,21 @@ struct RootfsSection {
 
 // ── rootless id mapping ───────────────────────────────────────────────
 
-/// A delegated sub-id range parsed from `/etc/subuid` or `/etc/subgid`.
-#[derive(Debug, PartialEq, Eq)]
-struct SubIdRange {
-    /// First host id in the delegated range.
-    start: u32,
-    /// Number of ids in the range.
-    count: u32,
-}
-
-/// Build the rootless uid/gid mappings for the runtime spec.
+/// Build the rootless uid/gid mappings for the runtime spec (the library-consumer
+/// path, where youki creates the user namespace and applies these via
+/// `newuidmap`/`newgidmap`).
 ///
-/// Prefers a two-entry map backed by the caller's `/etc/subuid` + `/etc/subgid`
+/// A two-entry map backed by the caller's `/etc/subuid` + `/etc/subgid`
 /// allocation: container id 0 maps to the host user (size 1), and container ids
-/// `1..1+count` map onto the delegated sub-id range. This lets a base image's
+/// `1..1+count` map onto the delegated sub-id range, so a base image's
 /// non-root-owned files and `RUN --user <nonzero>` resolve to real ids instead
-/// of `nobody`. It requires the `newuidmap`/`newgidmap` setuid helpers,
-/// which libcontainer invokes to apply a multi-range map from an unprivileged
-/// process.
+/// of `nobody`. There is no single-id fallback: a missing delegation or helper
+/// is a hard, actionable error (see [`crate::subid::resolve_ranges`]) rather than
+/// a silent degrade to `nobody`-owned output.
 ///
-/// Falls back to the previous safe single-id identity map (container 0 → host
-/// user, size 1) when the sub-id ranges or the helpers are missing, logging the
-/// limitation once so non-root ids mapping to `nobody` isn't mistaken for a bug.
+/// On the default CLI path this is unused — `rootless::enter` already put the
+/// multi-id map on umf's own namespace and youki runs rootful inside it, so the
+/// runtime spec carries no id mappings at all.
 fn rootless_id_mappings(
     host_uid: u32,
     host_gid: u32,
@@ -978,68 +971,16 @@ fn rootless_id_mappings(
             .map_err(spec_build_error)
     };
 
-    let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(host_uid))
-        .ok()
-        .flatten()
-        .map(|u| u.name);
-
-    let sub_uid = read_subid_range("/etc/subuid", username.as_deref(), host_uid);
-    let sub_gid = read_subid_range("/etc/subgid", username.as_deref(), host_gid);
-
-    if let (Some(u), Some(g)) = (sub_uid, sub_gid)
-        && newuidmap_helpers_present()
-    {
-        let uid_mappings = vec![id_map(0, host_uid, 1)?, id_map(1, u.start, u.count)?];
-        let gid_mappings = vec![id_map(0, host_gid, 1)?, id_map(1, g.start, g.count)?];
-        return Ok((uid_mappings, gid_mappings));
-    }
-
-    warn!(
-        "rootless build: no usable /etc/subuid+/etc/subgid delegation (or \
-         newuidmap/newgidmap missing); using a single-id map. Container ids other \
-         than 0 map to `nobody`, so base-image files owned by non-root users and \
-         `RUN --user <nonzero>` will not resolve correctly."
-    );
-    Ok((vec![id_map(0, host_uid, 1)?], vec![id_map(0, host_gid, 1)?]))
-}
-
-/// Read and parse the caller's delegated range from a sub-id file.
-fn read_subid_range(path: &str, username: Option<&str>, id: u32) -> Option<SubIdRange> {
-    parse_subid_range(&fs::read_to_string(path).ok()?, username, id)
-}
-
-/// Parse a `/etc/subuid` / `/etc/subgid` body, returning the first range whose
-/// owner column matches the resolved `username` or the numeric `id`. Lines are
-/// `owner:start:count`; blanks and `#` comments are skipped, zero-count ranges
-/// ignored.
-fn parse_subid_range(contents: &str, username: Option<&str>, id: u32) -> Option<SubIdRange> {
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.split(':');
-        let who = parts.next()?;
-        let start = parts.next()?.trim().parse::<u32>().ok()?;
-        let count = parts.next()?.trim().parse::<u32>().ok()?;
-        let matches = username == Some(who) || who.parse::<u32>().ok() == Some(id);
-        if matches && count > 0 {
-            return Some(SubIdRange { start, count });
-        }
-    }
-    None
-}
-
-/// Whether both `newuidmap` and `newgidmap` are present on `PATH` — required to
-/// apply a multi-range rootless id map from an unprivileged process.
-fn newuidmap_helpers_present() -> bool {
-    binary_on_path("newuidmap") && binary_on_path("newgidmap")
-}
-
-/// Whether an executable named `name` exists on `PATH`.
-fn binary_on_path(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+    let (sub_uid, sub_gid) = crate::subid::resolve_ranges(host_uid, host_gid)?;
+    let uid_mappings = vec![
+        id_map(0, host_uid, 1)?,
+        id_map(1, sub_uid.start, sub_uid.count)?,
+    ];
+    let gid_mappings = vec![
+        id_map(0, host_gid, 1)?,
+        id_map(1, sub_gid.start, sub_gid.count)?,
+    ];
+    Ok((uid_mappings, gid_mappings))
 }
 
 /// A conservative resource ceiling for a single RUN step.

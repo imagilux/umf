@@ -1,19 +1,14 @@
 //! Unit tests for the rootless context derivation and error messaging.
 //!
 //! The namespace-entering path ([`super::enter`]) can't be exercised here:
-//! `unshare(CLONE_NEWUSER)` requires a single-threaded process and the cargo
-//! test harness is multi-threaded. End-to-end rootless behaviour is covered by
-//! the binary-driven integration lane instead. These tests pin the pure
-//! seams: the single-id map line, the passive-context invariants, and the
-//! remediation hint on permission failures.
+//! `unshare(CLONE_NEWUSER)` + the `newuidmap` fork dance require a
+//! single-threaded process and the cargo test harness is multi-threaded.
+//! End-to-end rootless behaviour is covered by the binary-driven integration
+//! lane instead (and the subid map computation by `crate::subid` tests). These
+//! tests pin the pure seams: the passive-context invariants and the remediation
+//! hint on a permission-denied namespace failure.
 
 use super::*;
-
-#[test]
-fn id_map_line_is_single_id() {
-    assert_eq!(id_map_line(1000), "0 1000 1");
-    assert_eq!(id_map_line(0), "0 0 1");
-}
 
 #[test]
 fn passive_context_never_reports_an_entered_userns() {
@@ -48,19 +43,4 @@ fn eperm_carries_the_userns_remediation_hint() {
             .contains("apparmor_restrict_unprivileged_userns"),
         "non-EPERM failures should not append the userns hint: {other}"
     );
-}
-
-#[test]
-fn map_write_permission_denied_carries_the_hint() {
-    let denied = map_error(
-        "uid_map",
-        &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-    );
-    assert!(denied.to_string().contains("AppArmor"));
-
-    let missing = map_error(
-        "uid_map",
-        &std::io::Error::from(std::io::ErrorKind::NotFound),
-    );
-    assert!(!missing.to_string().contains("AppArmor"));
 }
