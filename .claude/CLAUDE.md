@@ -2,6 +2,8 @@
 
 Dockerfile-inspired DSL that uses OCI image mechanics (layered, content-addressable, registry-distributed) to produce bootable artifacts — VM and bare-metal disk images, classic-boot or UKI-packaged — and OCI containers as the degenerate case.
 
+**OCI compliance is a design goal, not an afterthought.** `umf build` always emits a **100% OCI-compliant image** (enforced by the OCI image-spec conformance gate in CI). A container build produces a standard OCI image — its DSL directives map to ordinary OCI image-config fields, so it runs anywhere OCI runs. The bootable capability is an **OCI extension**, not a fork of the format: a bootable image is a normal OCI image carrying `org.imagilux.umf.*` labels (the extension namespace) that `umf compile` reads to project a disk. No custom artifact type, no non-OCI directives.
+
 This repository hosts two things, tightly coupled:
 
 1. The **UMF specification** — normative source under `docs/`, published via MkDocs Material at <https://umf.imagilux.org/>.
@@ -19,7 +21,7 @@ UMF — *Universal* Machine Format. Matches the repo directory name `umf/` and i
 ## Design pillars
 
 1. **One DSL, two shapes — container and bootable** — inferred from what `FROM` resolves to, never declared. A *bootable* build is a plain OCI build whose `FROM` resolves to a kernel artifact (`org.imagilux.umf.type=kernel`); a base image or `scratch` makes it a container. The boot chain has **no** dedicated directives — it is expressed in stock OCI primitives: the userland is a bare `ADD <oci-ref> /`, and boot packaging is a normal `LABEL org.imagilux.umf.flavor` (`systemd-boot` = classic, `uki` = Unified Kernel Image; `grub` reserved). `ENTRYPOINT` then picks PID 1: an init system (`systemd`/`openrc`) ⇒ `/sbin/init` + generated initramfs; a binary path ⇒ *appliance* via `init=`. VM vs bare metal is not a build choice — one byte-identical UEFI disk boots either way. Container is the degenerate case: no kernel, no boot chain.
-2. **OCI-native** — every component, including kernels, bootloaders, and build environments, ships as an OCI artifact in a standard registry. A kernel artifact is itself a UMF build that `FROM`'s a kernel-build-env (which is itself a UMF build); the system self-hosts at every level.
+2. **OCI-native and OCI-compliant** — every component, including kernels, bootloaders, and build environments, ships as an OCI artifact in a standard registry, and every image `umf build` emits is a spec-compliant OCI image (guarded by the `oci-conformance.yml` CI lane). Container directives map to standard OCI image-config fields; the only UMF-specific surface is the `org.imagilux.umf.*` **label namespace**, a conformant OCI extension that carries the bootable metadata without inventing new media types or artifact kinds. A kernel artifact is itself a UMF build that `FROM`'s a kernel-build-env (which is itself a UMF build); the system self-hosts at every level.
 3. **Sovereignty-first** — any artifact is buildable from source on an air-gapped node. Registries and caches accelerate but are never required.
 4. **Composable supply chain** — components are independently versioned; the same `registry → local cache → source build` resolution applies to every OCI reference: `FROM` and every `ADD <oci-ref>` (the userland base, formerly the `ROOTFS` directive).
 
@@ -40,8 +42,8 @@ Disk projection (the old L0 — GPT/ESP boot partition, UEFI, classic systemd-bo
 
 - **Boot chain (no dedicated directives)**: a bootable build `FROM`s a kernel artifact, lays down userland with `ADD <oci-ref> /`, and selects packaging with a `LABEL org.imagilux.umf.flavor`. The kernel comes from `FROM` (polymorphic — see L0 introspection); the initramfs is generated implicitly from `ENTRYPOINT` and the userland — there are no `FIRMWARE`, `BOOTLOADER`, `ROOTFS`, `KERNEL`, or `INITRD` directives. What `FROM` resolves to (a `type=kernel` artifact) is what marks a build bootable.
 - **Metadata**: FROM, LABEL, ENV, ARG
-- **Build steps**: SHELL, USER, WORKDIR, RUN, ADD
-- **Runtime config**: ENTRYPOINT, EXPOSE, ENABLE/DISABLE, HOSTNAME, LOCALE, TIMEZONE
+- **Build steps**: SHELL, USER, WORKDIR, RUN, ADD, COPY (COPY is Docker-compatible plain-copy — routes to ADD with local/`--from` sources only, no URL/OCI fetch)
+- **Runtime config (each maps to a standard OCI image-config field)**: ENTRYPOINT, CMD, EXPOSE, VOLUME, STOPSIGNAL. There is **no** `ENABLE`/`DISABLE`/`HOSTNAME`/`LOCALE`/`TIMEZONE` directive — those were removed; runtime OS configuration is the operator's job (cloud-init/ignition), not the image's.
 
 ## Storage model
 
@@ -49,19 +51,22 @@ Flat layout: a single root-filesystem partition for the system. Data volumes are
 
 Build output is always a sparse image. There is no build-time disk-size declaration — consumers (hypervisors, Redfish endpoints) provision according to runtime configuration, not an in-image hint.
 
-## Don't import Docker assumptions
+## OCI-compliant, Docker-compatible — with a few shape-driven semantics
 
-These directives diverge from Docker semantics — relying on Docker intuition will mislead:
+UMF is **not** a Docker fork or an OCI divergence: a container build emits a standard, conformance-gated OCI image, and its directives map onto ordinary OCI image-config fields. Docker intuition mostly transfers. What follows is where the DSL adds shape-driven behavior on top of the OCI baseline — read these as *UMF semantics*, not as breaking from OCI or Docker:
 
-- **EXPOSE** emits actual nftables rules with **default-deny**. Not metadata. Only explicitly-exposed ports are reachable.
-- **ENTRYPOINT** is polymorphic: `systemd` / `openrc` selects an init system (bootable build — VM or bare metal) and triggers implicit L3 initramfs generation; a binary path (`/myapp` or exec form `["/usr/sbin/nginx", "-g", "daemon off;"]`) runs the executable directly as PID 1 (appliance in a bootable build — `init=<path>`, no initramfs; plain entrypoint in a container otherwise); `none` skips PID 1 entirely (container where the runtime supplies init). Bare-string keywords without a leading `/` are reserved for the init-system values.
-- **FROM** is polymorphic and structurally introspected — and it is the *single source of truth* for the build's shape. The builder resolves `FROM` (registry → cache), reads `org.imagilux.umf.type` (or infers from manifest structure), and shapes the build accordingly: resolves to `type=kernel` ⇒ bootable (vmlinuz + modules installed at L2, RUN in a micro-VM); resolves to a container base or `scratch` ⇒ container (RUN in a container). A `type=bootable` image **is** a valid FROM — extend it like any base and the result stays bootable. The old `type=vm` no longer exists: a projected disk is never an OCI artifact. Mismatches (e.g. a bootable-only `flavor` label on a container base) are rejected at build start. There is no per-directive "mode" — every polymorphism lives on FROM.
-- **RUN** execution depends on the resolved shape: container build (FROM a base / `scratch`) → container, bootable build (FROM a kernel) → micro-VM booted from the current layer state. Not a per-target switch — derived from what `FROM` resolves to.
+- **The container directives are plain OCI config.** `ENTRYPOINT`, `CMD`, `EXPOSE`, `VOLUME`, `STOPSIGNAL`, `ENV`, `USER`, `WORKDIR`, `LABEL` all write standard OCI image-config fields (`Entrypoint`, `Cmd`, `ExposedPorts`, `Volumes`, `StopSignal`, `Env`, `User`, `WorkingDir`, `Labels`). A UMF container image runs on any OCI runtime, and `docker` / `podman` / `containerd` / `skopeo` read it unchanged.
+- **EXPOSE is metadata on containers, enforcement on bootable.** On a **container** build, `EXPOSE` records the port in OCI `config.ExposedPorts` — metadata only, exactly like Docker; the runtime governs reachability. On an **init-system bootable** image (`ENTRYPOINT systemd`/`openrc`) it *additionally* emits a **default-deny nftables** ruleset wired to load at boot, because there a real host firewall exists to program. (Appliance bootable images write `/etc/nftables.conf` but have no init to auto-load it.) So "EXPOSE is a firewall, not metadata" is a **bootable-only** guarantee, not a container behavior — don't overgeneralize it.
+- **The bootable shape is an OCI extension, expressed only through labels + stock primitives.** There are no bootable-specific directives. A bootable image is a normal OCI image carrying the `org.imagilux.umf.*` label namespace (`type=bootable`, `flavor`, `kernel.*`, `initramfs`, `rootfs.fs`, …); the userland is a bare `ADD <oci-ref> /`, boot packaging is a `LABEL org.imagilux.umf.flavor`. `umf compile` reads those labels to project a disk. Nothing here breaks OCI — a non-UMF consumer just sees an image with extra labels.
+- **ENTRYPOINT is polymorphic (PID-1 selection).** `systemd` / `openrc` selects an init system (bootable build — VM or bare metal) and triggers implicit L3 initramfs generation; a binary path (`/myapp` or exec form `["/usr/sbin/nginx", "-g", "daemon off;"]`) runs the executable directly as PID 1 (appliance in a bootable build — `init=<path>`, no initramfs; plain OCI entrypoint in a container otherwise); `none` skips PID 1 entirely (container where the runtime supplies init). Bare-string keywords without a leading `/` are reserved for the init-system values. The stored value is still a standard OCI `Entrypoint` — the polymorphism is in how the *builder* interprets it, not in the emitted config.
+- **FROM is polymorphic and structurally introspected — the single source of truth for the build's shape.** The builder resolves `FROM` (registry → cache), reads `org.imagilux.umf.type` (or infers from manifest structure), and shapes the build accordingly: resolves to `type=kernel` ⇒ bootable (vmlinuz + modules installed at L2, RUN in a micro-VM); resolves to a container base or `scratch` ⇒ container (RUN in a container). A `type=bootable` image **is** a valid FROM — extend it like any base and the result stays bootable. The old `type=vm` no longer exists: a projected disk is never an OCI artifact. Mismatches (e.g. a bootable-only `flavor` label on a container base) are rejected at build start. There is no per-directive "mode" — every polymorphism lives on FROM.
+- **RUN execution depends on the resolved shape:** container build (FROM a base / `scratch`) → container, bootable build (FROM a kernel) → micro-VM booted from the current layer state. Not a per-target switch — derived from what `FROM` resolves to.
 
 ## Adopted Docker conventions (no surprises here)
 
 These are intentionally Docker-shaped — reach for Docker intuition first.
 
+- **OCI image-config directives**: `CMD`, `COPY`, `VOLUME`, `STOPSIGNAL` (plus `ENV`/`USER`/`WORKDIR`/`LABEL`/`ENTRYPOINT`/`EXPOSE`) behave exactly like their Dockerfile counterparts and set the matching OCI config field, so an existing Dockerfile's container half ports over unchanged. `COPY` is the local/`--from`-only sibling of `ADD` (no URL/OCI fetch).
 - **Multi-stage**: `FROM <image> AS <name>` + `ADD --from=<name> <src> <dst>`. Each stage is an independent OCI image; the final stage's `FROM` selects the shape. (`--from` is stage-only; an external OCI image is laid down with a *bare* `ADD <oci-ref> /`, not `--from`.)
 - **Cross-architecture**: `--platform=linux/<arch>` runtime flag (Buildx convention), not a DSL directive. Drives every component-resolution decision (the kernel and userland images pulled via `FROM` / `ADD` must match the target arch); `binfmt_misc` + qemu-user-static handle RUN steps in container mode.
 - **Build secrets**: `RUN --mount=type=secret,id=<id>,target=<path> ...` for sensitive material (Secure Boot signing keys, pull credentials, etc.). Never via ARG. Secret is scoped to a single RUN, never enters a layer, never contaminates the cache key.
@@ -70,10 +75,11 @@ These are intentionally Docker-shaped — reach for Docker intuition first.
 
 The `umf` CLI is daemonless and OCI-native end to end. Subcommands, grouped:
 
-- **Authoring / build**: `parse`, `build` — always emits an OCI image (`--tag`, `--push`, `--secret`, `--metrics`); the shape is inferred from what `FROM` resolves to (a `type=kernel` base produces a `type=bootable` image, otherwise a container image). There is no `--disk-out`.
+- **Authoring / build**: `parse`, `build` — always emits an OCI image (`--tag`, `--push`, `--secret`, `--metrics`, `--compression gzip|zstd`, and the rootless egress flags `--rootless-net native|pasta|none` / `--rootless-net-allow <category>`); the shape is inferred from what `FROM` resolves to (a `type=kernel` base produces a `type=bootable` image, otherwise a container image). There is no `--disk-out`.
 - **Project**: `compile` — projects a `type=bootable` OCI image to a VM or bare-metal disk image (GPT/ESP, UEFI; classic systemd-boot or UKI), reading the `org.imagilux.umf.flavor` label plus the image's layers. This is the former bootable `--disk-out` path, now a separate step.
 - **Run**: `run` — container via linked-in libcontainer (`-i`, `-e`, `--entrypoint`, CMD override); VM via `--vmm=qemu|ch --disk <img>`.
-- **Layout / distribution**: `images` (list / `--remove` / `--prune` — `rmi` was folded in here), `index` (compose a multi-arch image index from already-built per-arch images), `push`, `pull`, `save`, `load` (OCI Image Layout archives, skopeo/`docker save`-compatible).
+- **Supply chain / provenance** (all emitted as **OCI 1.1 referrer artifacts**, cosign-/oras-compatible): `sbom` (generate / attach an SBOM referrer), `sign` (cosign-compatible signature referrer), `attest` (signed in-toto/SLSA DSSE predicate referrer). Verifiable with stock `cosign` / `oras` — another facet of OCI compliance.
+- **Layout / distribution**: `images` (list / `--remove` / `--prune` — `rmi` was folded in here), `index` (compose a multi-arch image index from already-built per-arch images), `push`, `pull`, `save`, `load` (OCI Image Layout archives, skopeo/`docker save`-compatible), `registry` (manage the registry set searched for unqualified references — added registries are tried in order, then `docker.io`).
 - **Introspection / ops**: `inspect`, `ps` (process registry under `$XDG_STATE_HOME/umf/processes/`), `doctor` (host-runtime check).
 - **Dev tooling**: `debug build` (directive-by-directive step-through), `bench` (cold + N warm, cache-determinism flags).
 
@@ -108,7 +114,7 @@ umf/
 ├── uv.lock
 ├── src/                         # Rust — `umf` CLI binary
 │   ├── main.rs                  # thin entrypoint → cli::run
-│   ├── cli/                     # clap parsing + per-subcommand dispatch (build, compile, run, images, index, push/pull, save/load, inspect, ps, doctor, debug, bench)
+│   ├── cli/                     # clap parsing + per-subcommand dispatch (build, compile, run, images, index, push/pull, save/load, sbom, sign, attest, registry, inspect, ps, doctor, debug, bench)
 │   └── render.rs                # `umf parse` table renderer
 ├── crates/                      # Rust — library crates (umf- prefix: avoids std::core shadow + ready for crates.io publication)
 │   ├── umf-core/                # shared types, errors, AST, OCI label namespace
@@ -120,16 +126,16 @@ umf/
 │   ├── umf-oci/                 # OCI primitives — manifest/config/layer emission, registry client, layout cache, materialize, staging, archive import
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   ├── umf-networking/          # NAT'd egress for container RUN steps — veth pair (rtnetlink) + host nft masquerade
+│   ├── umf-networking/          # RUN-step + VM egress — rootful veth/nft NAT masquerade, rootless userspace egress (in-proc smoltcp native gateway + pasta), SSRF connect-time policy, VM port-forward (netns+tap+nft DNAT, VmNet)
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   ├── umf-engine/              # container build engine — libcontainer RUN executor, OCI bundle prep, overlayfs lower/upper capture, RUN-step egress (umf-networking); also powers umf run (container target)
+│   ├── umf-engine/              # container build engine — libcontainer RUN executor (seccomp/caps/masked-paths/LSM), OCI bundle prep, overlayfs lower/upper capture, rootless single-userns entry + subid multi-id map (newuidmap), RUN-step egress (umf-networking); also powers umf run (container target)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   ├── umf-vmm/                 # VMM control layer — VmRuntime trait + QEMU/QMP & Cloud Hypervisor/REST backends; powers umf run (VM) + per-RUN micro-VMs
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   ├── umf-builder/             # AST → OCI image — FROM resolution + introspection, RUN backends (container / micro-VM), secrets, EXPOSE→nftables, boot-manifest labels
+│   ├── umf-builder/             # AST → OCI image — FROM resolution + introspection, RUN backends (container / micro-VM), secrets, EXPOSE→OCI ExposedPorts (container) / nftables (bootable), boot-manifest labels
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   └── umf-compile/             # disk projection — type=bootable OCI image → GPT/ESP/UEFI disk (squashfs root, systemd-boot or UKI); powers umf compile
@@ -215,10 +221,10 @@ cargo run -- <args>                                         # run the CLI
 - `umf-core` — shared types, errors, AST node definitions, the `org.imagilux.umf.*` label namespace constants. No external IO. Depended on by everything else; depends on nothing.
 - `umf-parser` — `&str` → AST. Lexer + grammar + diagnostics. Depends only on `umf-core`. Future LSP / linting tools depend on this without pulling in builder dependencies.
 - `umf-oci` — OCI primitives. Image emission (manifest / config / layer blobs into a layout), on-disk image-layout cache, registry client (pull/push, distribution protocol), layer materialization (whiteouts, traversal containment), build staging directory, OCI Image Layout archive import/export. Depends only on `umf-core`.
-- `umf-networking` — NAT'd egress for container RUN steps. Builds a veth pair + addresses + routes in-process via `rtnetlink` (NETLINK_ROUTE) and applies a host-side NAT masquerade rule via the `nft` binary. No internal umf deps. (`rustables` is deliberately avoided — it SIGABRTs on send under `nix` ≥ 0.27.)
-- `umf-engine` — UMF-native container build + run engine. youki/`libcontainer`-backed RUN executor, OCI bundle preparation from a pulled image, overlayfs setup with stackable lowers + captured upper-dir, per-RUN egress wired through `umf-networking`. Powers both container builds and `umf run`'s container path. Depends on `umf-core` + `umf-oci` + `umf-networking`. Runs in-process — no `docker build`, no host docker/podman dependency.
+- `umf-networking` — RUN-step and VM egress. Three surfaces: (1) **rootful** NAT egress — a veth pair + addresses + routes in-process via `rtnetlink` (NETLINK_ROUTE) plus a host-side NAT masquerade rule via the `nft` binary; (2) **rootless** userspace egress — an in-process smoltcp transparent gateway (`native`, air-gapped-safe, the default) or the external `pasta`/`passt` helper, with a connect-time SSRF policy that denies host-internal address categories (loopback / link-local incl. cloud-metadata / rfc1918 / ULA / CGNAT) by default; (3) **VM port-forwarding** — a per-VM netns + tap + `nft` DNAT (`VmNet`) for the Cloud Hypervisor backend. No internal umf deps. (`rustables` is deliberately avoided — it SIGABRTs on send under `nix` ≥ 0.27.)
+- `umf-engine` — UMF-native container build + run engine. youki/`libcontainer`-backed RUN executor under a full sandbox (default-deny seccomp, dropped caps, masked/read-only paths, optional AppArmor/SELinux LSM), OCI bundle preparation from a pulled image, overlayfs setup with stackable lowers + captured upper-dir, rootless single-user-namespace entry with a subordinate multi-id map (`/etc/subuid`+`/etc/subgid` via the setuid `newuidmap`/`newgidmap` helpers), per-RUN egress wired through `umf-networking`. Powers both container builds and `umf run`'s container path. Depends on `umf-core` + `umf-oci` + `umf-networking`. Runs in-process — no `docker build`, no host docker/podman dependency.
 - `umf-vmm` — VMM control layer. The `VmRuntime` trait plus QEMU (QMP) and Cloud Hypervisor (REST) backends. Powers both `umf run`'s VM boot path and the builder's per-RUN micro-VMs (bootable build). A pure control surface — no internal umf deps.
-- `umf-builder` — AST → OCI image. FROM resolution + introspection (the container-vs-bootable decision), container-target lowering through `umf-engine`, micro-VM RUN execution through `umf-vmm` (bootable build), boot-manifest labels, EXPOSE→nftables generation, secrets handling. Emits the OCI image (container or `type=bootable`); disk projection lives in `umf-compile`. Depends on `umf-core` + `umf-oci` + `umf-engine` + `umf-vmm`; deliberately does **not** depend on `umf-parser`.
+- `umf-builder` — AST → OCI image. FROM resolution + introspection (the container-vs-bootable decision), container-target lowering through `umf-engine`, micro-VM RUN execution through `umf-vmm` (bootable build), boot-manifest labels, EXPOSE lowering (OCI `config.ExposedPorts` on a container, default-deny nftables on an init-system bootable image), secrets handling. Emits the OCI image (container or `type=bootable`); disk projection lives in `umf-compile`. Depends on `umf-core` + `umf-oci` + `umf-engine` + `umf-vmm`; deliberately does **not** depend on `umf-parser`.
 - `umf-compile` — disk projection. Takes a `type=bootable` OCI image and emits a bootable disk: GPT partition table + ESP/FAT32 (`gpt`, `fatfs`), squashfs root (`backhand`), and the boot chain (UKI or systemd-boot per the `flavor` label), with symlink-contained reads of in-image boot files. Powers `umf compile`. Depends on `umf-core` + `umf-oci`.
 - `umf` (binary, in `src/`) — CLI wiring. Depends on `umf-core`, `umf-parser`, `umf-oci`, `umf-engine`, `umf-vmm`, `umf-builder`, `umf-compile` (and `umf-networking` transitively through `umf-engine`).
 
