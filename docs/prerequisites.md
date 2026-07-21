@@ -33,15 +33,16 @@ A `RUN` step that reaches the network (`apt-get`, `apk add`, `git clone`, `curl`
 
 ## Rootless builds
 
-An unprivileged `umf build` (and container `umf run`) runs entirely inside one user namespace UMF enters at startup, with no helper subprocess. `umf doctor` reports a **Rootless builds** section. Building as root needs none of this.
+An unprivileged `umf build` (and container `umf run`) runs entirely inside one user namespace UMF enters at startup. `umf doctor` reports a **Rootless builds** section. Building as root needs none of this.
 
 | Item | Why | Debian / Ubuntu | Fedora |
 |------|-----|------------------|--------|
 | **Unprivileged user namespaces** | UMF maps your user to container root in a namespace it creates; without it a rootless build cannot start. On Ubuntu 24.04+ the AppArmor policy `kernel.apparmor_restrict_unprivileged_userns=1` blocks it for unconfined binaries. | grant `umf` an AppArmor profile with `userns,`, or `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`; check `user.max_user_namespaces` > 0 | check `user.max_user_namespaces` > 0 (unrestricted by default) |
+| **`uidmap` + subid delegation** | UMF maps the container's ids onto your delegated `/etc/subuid` + `/etc/subgid` range using the setuid `newuidmap`/`newgidmap` helpers. This is what makes `apt`/`dnf` (which drop to a sandbox user via `setgroups`), base-image files owned by non-root users, and `RUN --user <nonzero>` resolve to real ids. Without it a rootless **container** build fails with an actionable error (bootable and rootful builds don't need it). | `sudo apt-get install -y uidmap`, then `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"` | `sudo dnf install -y shadow-utils` (usually preinstalled); ensure `/etc/subuid`+`/etc/subgid` have a range (default on most installs) |
 | **systemd user session** (cgroup v2 delegation) | Rootless cgroup placement is **systemd-dependent**: UMF asks your user systemd, over its session bus, to create a delegated scope per `RUN` step. A login session already has one; a minimal host, a CI runner, or a non-login shell may not. | `sudo loginctl enable-linger "$(id -un)"`, or build from a login session | same |
 | **Linux ≥ 5.11** | The rootfs overlay is mounted in-process with the kernel overlay driver inside the user namespace, support for which (unprivileged overlay) landed in 5.11. | kernel 5.11+ (Ubuntu 22.04+ qualifies) | kernel 5.11+ |
 
-Rootless `RUN` steps run with a **single-id** map (container root is your user; other ids resolve to `nobody`), detailed in [Known limitations](known-limitations.md). For network egress, see the next section.
+Rootless `RUN` steps run under a full subordinate-id map: container root is your user, and the rest of the container id space maps onto your delegated `/etc/subuid`/`/etc/subgid` range, so image files owned by non-root users and `RUN --user` resolve to real ids. For network egress, see the next section.
 
 ## Rootless RUN-step network egress
 
@@ -114,7 +115,7 @@ Not required for any build; it only makes **warm** rebuilds faster.
 |--------------|----------|
 | Build the `umf` binary | `libseccomp-dev` |
 | Build/run **containers** | nothing beyond the binary (egress packages only if `RUN` hits the network) |
-| Build/run **containers rootless** (non-root) | unprivileged user namespaces enabled + a systemd user session |
+| Build/run **containers rootless** (non-root) | unprivileged user namespaces enabled + `uidmap` + `/etc/subuid`,`subgid` delegation + a systemd user session |
 | Rootless `RUN` steps that fetch packages (default `native` backend) | nothing extra |
 | Rootless `RUN` steps with the `pasta` backend | `passt` package + `--rootless-net pasta` |
 | Privileged `RUN` steps that fetch packages | `nftables` + forwarding allowed |

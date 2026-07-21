@@ -23,28 +23,33 @@
 //! so operations that need genuine privilege (erofs mounts, host cgroup
 //! writes, host veth/nftables) are gated on [`RootlessContext::host_privileged`].
 
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::OnceLock;
 
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::mount::{MsFlags, mount};
 use nix::sched::{CloneFlags, unshare};
-use nix::unistd::{geteuid, getgid, getuid};
+use nix::sys::wait::waitpid;
+use nix::unistd::{ForkResult, Pid, geteuid, getgid, getppid, getuid, pipe, read, write};
 
 use crate::error::EngineError;
+use crate::subid::{self, SubIdRange};
 
 /// Process-wide rootless facts, established once by [`enter`].
 #[derive(Debug, Clone, Copy)]
 pub struct RootlessContext {
-    /// We created and entered our own user namespace at startup, so the
-    /// process is euid `0` inside it under a single-id map (host uid → `0`).
+    /// We created and entered our own user namespace at startup, so the process
+    /// is euid `0` inside it under a full multi-id map (host uid → `0`, plus the
+    /// caller's delegated `/etc/subuid`/`/etc/subgid` range).
     pub entered_userns: bool,
     /// We hold **real** host privilege (started as uid `0` in the initial user
     /// namespace). Gate operations that need genuine host authority on this,
     /// never on `euid == 0` — which is true inside our namespace without it.
     pub host_privileged: bool,
-    /// The host uid the single-id map points container `0` at (the real uid;
-    /// preserved because `getuid()` reports `0` once we are in the namespace).
+    /// The host uid the map points container `0` at (the real uid; preserved
+    /// because `getuid()` reports `0` once we are in the namespace).
     pub host_uid: u32,
-    /// The host gid the single-id map points container `0` at.
+    /// The host gid the map points container `0` at.
     pub host_gid: u32,
 }
 
@@ -96,10 +101,12 @@ pub fn cgroup_scope_path(container_id: &str) -> Option<std::path::PathBuf> {
 ///   `unshare -r` or by podman): records `entered_userns = true`,
 ///   `host_privileged = false` and returns — we build inside the namespace we
 ///   were handed; no nesting.
-/// - **unprivileged** (euid != `0`): `unshare(CLONE_NEWUSER)`, write a single-id
-///   map (container `0` → our uid), then `unshare(CLONE_NEWNS)` and make the
-///   mount tree `rslave` so the in-userns overlay mount neither propagates to
-///   nor receives events from the host.
+/// - **unprivileged** (euid != `0`): `unshare(CLONE_NEWUSER)` and apply the full
+///   multi-id map (container `0` → our uid, plus the delegated `/etc/subuid`,
+///   `/etc/subgid` range) via `newuidmap`/`newgidmap`, then `unshare(CLONE_NEWNS)`
+///   and make the mount tree `rslave` so the in-userns overlay mount neither
+///   propagates to nor receives events from the host. Requires the `uidmap`
+///   helpers + a subid grant (a hard requirement; see [`crate::subid`]).
 ///
 /// Idempotent: the [`RootlessContext`] is recorded once and returned on every
 /// later call.
@@ -126,8 +133,18 @@ pub fn enter() -> Result<RootlessContext, EngineError> {
         let uid = getuid().as_raw();
         let gid = getgid().as_raw();
 
-        unshare(CloneFlags::CLONE_NEWUSER).map_err(|e| userns_error("create user namespace", e))?;
-        write_single_id_maps(uid, gid)?;
+        // Precheck the subordinate-id delegation BEFORE unshare: a missing helper
+        // or grant must fail cleanly here (leaving us in the host namespace),
+        // never after `unshare(CLONE_NEWUSER)`, which would strand the process in
+        // an unmapped namespace with no way back. Best-effort at the call site: a
+        // bootable build (RUN in a micro-VM) never needs this, and a container
+        // build re-surfaces the same requirement at the youki boundary.
+        let (sub_uid, sub_gid) = subid::resolve_ranges(uid, gid)?;
+
+        // Create the namespace and apply the full multi-id map via
+        // newuidmap/newgidmap (see `apply_subordinate_maps`).
+        apply_subordinate_maps(uid, gid, &sub_uid, &sub_gid)?;
+
         // We are now root in the new namespace, so we may unshare a private
         // mount namespace to own the overlay mount.
         unshare(CloneFlags::CLONE_NEWNS).map_err(|e| userns_error("create mount namespace", e))?;
@@ -154,22 +171,160 @@ pub fn enter() -> Result<RootlessContext, EngineError> {
     Ok(*CONTEXT.get().unwrap_or(&ctx))
 }
 
-/// Write the single-id identity map for the freshly-unshared user namespace,
-/// in-process — no `newuidmap`/`newgidmap` helper. Container `0` maps to the
-/// caller's host uid/gid (size 1). `setgroups` is denied first: the kernel
-/// refuses an unprivileged `gid_map` write otherwise.
-fn write_single_id_maps(uid: u32, gid: u32) -> Result<(), EngineError> {
-    std::fs::write("/proc/self/setgroups", b"deny").map_err(|e| map_error("setgroups", &e))?;
-    std::fs::write("/proc/self/gid_map", id_map_line(gid)).map_err(|e| map_error("gid_map", &e))?;
-    std::fs::write("/proc/self/uid_map", id_map_line(uid)).map_err(|e| map_error("uid_map", &e))?;
+/// Create the user namespace and apply the caller's full **multi-id**
+/// subordinate map via the setuid `newuidmap`/`newgidmap` helpers.
+///
+/// The kernel forbids an unprivileged process from writing a multi-id map for
+/// itself, so a transient child forked **before** the `unshare` (thus staying in
+/// the initial namespace, where its real uid still owns the `/etc/subuid` grant)
+/// runs the helpers against our pid. Ordering is enforced over a pipe: the
+/// parent unshares, signals the child, the child maps and reports back.
+/// `setgroups` is left at `allow` — the helpers hold `CAP_SETGID` and are exempt
+/// from the deny rule, so `apt`/`dnf` sandbox setup and `RUN --user` work.
+///
+/// Must run single-threaded (guaranteed by the startup call site), for both the
+/// `fork` and the later `unshare(CLONE_NEWUSER)`.
+// `fork` + `_exit` are irreducibly unsafe; both uses are documented at their
+// call sites and rely on the single-threaded invariant.
+#[allow(unsafe_code)]
+fn apply_subordinate_maps(
+    uid: u32,
+    gid: u32,
+    sub_uid: &SubIdRange,
+    sub_gid: &SubIdRange,
+) -> Result<(), EngineError> {
+    // `go`: parent → child "namespace is up, proceed". `res`: child → parent
+    // status byte + (on failure) the helper's stderr.
+    let (go_r, go_w) = pipe().map_err(|e| userns_error("create sync pipe", e))?;
+    let (res_r, res_w) = pipe().map_err(|e| userns_error("create result pipe", e))?;
+    // Don't leak these into the setuid `newuidmap`/`newgidmap` the child execs.
+    // The child never execs itself, so CLOEXEC only closes them in the helper.
+    for fd in [&go_r, &go_w, &res_r, &res_w] {
+        let _ = fcntl(fd.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
+    }
+
+    // SAFETY: single-threaded here (enter runs before any Tokio runtime), so
+    // fork() is sound — no other thread can hold a lock the child would inherit.
+    match unsafe { nix::unistd::fork() }.map_err(|e| userns_error("fork map helper", e))? {
+        ForkResult::Child => {
+            // Helper, still in the initial user namespace. Keep it minimal: wait
+            // for the parent to unshare, apply the maps, report, `_exit`.
+            drop(go_w);
+            drop(res_r);
+            let mut go = [0u8; 1];
+            let got = read(go_r.as_raw_fd(), &mut go).unwrap_or(0);
+            if got != 1 || go[0] != 1 {
+                // Parent early-returned (the unshare failed), so the namespace was
+                // never created — do not run the setuid helpers against a
+                // non-unshared parent. `_exit`, not `exit`: skip atexit/flush.
+                unsafe { nix::libc::_exit(1) };
+            }
+            match run_id_helpers(getppid(), uid, gid, sub_uid, sub_gid) {
+                Ok(()) => {
+                    let _ = write(&res_w, &[0u8]);
+                }
+                Err(msg) => {
+                    let _ = write(&res_w, &[1u8]);
+                    let _ = write(&res_w, msg.as_bytes());
+                }
+            }
+            unsafe { nix::libc::_exit(0) };
+        }
+        ForkResult::Parent { child } => {
+            drop(go_r);
+            drop(res_w);
+
+            // If the unshare fails (e.g. userns restricted on this host) we are
+            // STILL in the host namespace: reap the helper (it sees EOF on `go`
+            // and exits) and return Err so the caller's best-effort startup hook
+            // can continue — a bootable build never needs the namespace.
+            if let Err(e) = unshare(CloneFlags::CLONE_NEWUSER) {
+                drop(go_w);
+                let _ = waitpid(child, None);
+                return Err(userns_error("create user namespace", e));
+            }
+
+            // Past the unshare we are in a fresh, still-unmapped namespace with no
+            // way back to the host one, so failing to apply the map is FATAL:
+            // continuing would run the whole build as the overflow uid (`nobody`).
+            // Abort with the actionable error rather than returning it, which the
+            // CLI's best-effort startup hook would otherwise swallow.
+            if let Err(detail) = finish_subordinate_maps(&go_w, &res_r, child) {
+                eprintln!(
+                    "error: rootless: the user namespace was created but its \
+                     subordinate id map could not be applied, so the build cannot \
+                     continue: {detail}"
+                );
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Signal the helper that the namespace exists, read its result, and reap it
+/// (always, so no zombie is left on a failure path). Returns the helper's error
+/// detail on failure. Runs only after the parent has successfully unshared.
+fn finish_subordinate_maps(go_w: &OwnedFd, res_r: &OwnedFd, child: Pid) -> Result<(), String> {
+    let go = write(go_w, &[1u8]).map_err(|e| format!("signalling the map helper: {e}"));
+
+    // Read status + optional stderr regardless of the go-write result, so the
+    // child is always reaped below.
+    let mut status = [0u8; 1];
+    let n = read(res_r.as_raw_fd(), &mut status).unwrap_or(0);
+    let mut msg = Vec::new();
+    if n == 1 && status[0] != 0 {
+        let mut buf = [0u8; 512];
+        while let Ok(k) = read(res_r.as_raw_fd(), &mut buf) {
+            if k == 0 || msg.len() > 8192 {
+                break;
+            }
+            msg.extend_from_slice(&buf[..k]);
+        }
+    }
+    let _ = waitpid(child, None);
+
+    go?;
+    if n != 1 || status[0] != 0 {
+        let detail = String::from_utf8_lossy(&msg);
+        return Err(if detail.trim().is_empty() {
+            "the map helper exited abnormally".to_string()
+        } else {
+            detail.into_owned()
+        });
+    }
     Ok(())
 }
 
-/// The single-id `/proc/self/{uid,gid}_map` line: container `0` → host `id`,
-/// range size 1. The only mapping an unprivileged process may install for
-/// itself without the setuid `newuidmap`/`newgidmap` helpers.
-fn id_map_line(host: u32) -> String {
-    format!("0 {host} 1")
+/// Run `newuidmap` then `newgidmap` against `pid`, mapping container `0` to the
+/// invoking user and container `1..` onto the delegated ranges. Returns the
+/// combined helper stderr on failure. Called only from the forked child.
+fn run_id_helpers(
+    pid: Pid,
+    uid: u32,
+    gid: u32,
+    sub_uid: &SubIdRange,
+    sub_gid: &SubIdRange,
+) -> Result<(), String> {
+    let (uid_triples, gid_triples) = subid::mapping_triples(uid, gid, sub_uid, sub_gid);
+    run_helper("newuidmap", &subid::helper_args(pid.as_raw(), &uid_triples))?;
+    run_helper("newgidmap", &subid::helper_args(pid.as_raw(), &gid_triples))?;
+    Ok(())
+}
+
+fn run_helper(bin: &str, args: &[String]) -> Result<(), String> {
+    let out = std::process::Command::new(bin)
+        .args(args)
+        .output()
+        .map_err(|e| format!("spawning {bin}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{bin} exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// Whether this process lives in the initial user namespace (its `uid_map` is
@@ -205,16 +360,6 @@ fn userns_error(step: &str, err: nix::errno::Errno) -> EngineError {
         msg.push_str(USERNS_DENIED_HINT);
     }
     EngineError::runtime(msg, Some(Box::new(err)))
-}
-
-/// Wrap a `/proc/self/{uid,gid}_map`/`setgroups` write failure, with the same
-/// remediation on `PermissionDenied` (where Ubuntu's AppArmor policy surfaces).
-fn map_error(file: &str, err: &std::io::Error) -> EngineError {
-    let mut msg = format!("rootless: failed to write /proc/self/{file}: {err}");
-    if err.kind() == std::io::ErrorKind::PermissionDenied {
-        msg.push_str(USERNS_DENIED_HINT);
-    }
-    EngineError::runtime(msg, None)
 }
 
 const USERNS_DENIED_HINT: &str = ". Unprivileged user namespaces appear to be \

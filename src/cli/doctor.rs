@@ -214,20 +214,27 @@ fn container_rows(_detected: &DetectedRuntimes, net: &NetworkEgress) -> Vec<Row>
         session_status,
     ));
 
-    // Optional rootless helpers — the default rootless path needs neither.
+    // Subordinate-id delegation is a hard requirement for a rootless *container*
+    // build: the multi-id user-namespace map is applied by newuidmap/newgidmap
+    // from the caller's /etc/subuid+/etc/subgid grant. Absent, a rootless
+    // container build fails with an actionable error (a rootful or bootable
+    // build needs none of it).
+    let (subid_detail, subid_status) = rootless_subid_status();
+    rows.push(Row::new(
+        "subordinate ids",
+        "newuidmap/newgidmap + /etc/subuid,subgid for rootless container builds",
+        "(uidmap)",
+        subid_detail,
+        subid_status,
+    ));
+
     // fuse-overlayfs only backs the RUN overlay on kernels too old for an
-    // unprivileged kernel-overlay mount; newuidmap/newgidmap only enable a
-    // multi-id map (the default is single-id, written in-process).
+    // unprivileged kernel-overlay mount; advisory (the default kernel overlay
+    // needs nothing external).
     rows.push(tool_row(
         "fuse-overlayfs",
         "rootless RUN overlay fallback (kernels < 5.11)",
         which_on_path("fuse-overlayfs").as_deref(),
-        Status::Warn,
-    ));
-    rows.push(tool_row(
-        "newuidmap",
-        "optional multi-id rootless map (default is single-id)",
-        which_on_path("newuidmap").as_deref(),
         Status::Warn,
     ));
     rows.push(tool_row(
@@ -256,6 +263,39 @@ fn container_rows(_detected: &DetectedRuntimes, net: &NetworkEgress) -> Vec<Row>
     ));
 
     rows
+}
+
+/// Whether the caller has the subordinate-id delegation a rootless container
+/// build needs: both `newuidmap`/`newgidmap` on `PATH` and a matching
+/// `/etc/subuid` + `/etc/subgid` range. Reports `Missing` (a hard requirement)
+/// when either is absent, with the remedy; a rootful/bootable build needs none.
+fn rootless_subid_status() -> (String, Status) {
+    let has_uidmap = which_on_path("newuidmap").is_some();
+    let has_gidmap = which_on_path("newgidmap").is_some();
+    if !has_uidmap || !has_gidmap {
+        let missing = match (has_uidmap, has_gidmap) {
+            (false, false) => "newuidmap + newgidmap",
+            (false, true) => "newuidmap",
+            _ => "newgidmap",
+        };
+        return (
+            format!("{missing} not on PATH (install the `uidmap` package)"),
+            Status::Missing,
+        );
+    }
+    let ctx = umf_engine::rootless::context();
+    match umf_engine::subid::resolve_ranges(ctx.host_uid, ctx.host_gid) {
+        Ok(_) => (
+            "newuidmap/newgidmap + /etc/subuid,subgid delegation present".to_string(),
+            Status::Ok,
+        ),
+        Err(_) => (
+            "no /etc/subuid,subgid range for this user (`sudo usermod \
+             --add-subuids 100000-165535 --add-subgids 100000-165535 \"$(id -un)\"`)"
+                .to_string(),
+            Status::Missing,
+        ),
+    }
 }
 
 /// Whether unprivileged user namespaces are usable for a rootless build:

@@ -241,29 +241,6 @@ fn runtime_spec_carries_default_seccomp_profile() {
     }
 }
 
-#[test]
-fn parse_subid_range_matches_username_then_uid() {
-    let body = "# delegated ranges\nalice:100000:65536\nbob:200000:65536\n1000:300000:1000\n";
-    assert_eq!(
-        parse_subid_range(body, Some("bob"), 4242),
-        Some(SubIdRange {
-            start: 200_000,
-            count: 65_536
-        })
-    );
-    // Falls back to a numeric-uid match when the username doesn't appear.
-    assert_eq!(
-        parse_subid_range(body, Some("carol"), 1000),
-        Some(SubIdRange {
-            start: 300_000,
-            count: 1000
-        })
-    );
-    // No match; zero-count ranges are ignored.
-    assert_eq!(parse_subid_range(body, Some("dave"), 5), None);
-    assert_eq!(parse_subid_range("eve:1:0\n", Some("eve"), 5), None);
-}
-
 /// Build a tiny gzipped tar carrying one regular file at the requested
 /// path. Sufficient for unit-testing the layer unpacker without a real
 /// OCI image around.

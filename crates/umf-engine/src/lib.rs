@@ -63,6 +63,7 @@ pub mod rootless;
 pub mod run;
 pub mod runtime;
 pub mod seccomp;
+pub mod subid;
 
 pub use error::EngineError;
 pub use hooks::{BuildHook, HookAction, NoopHook, SharedHook, StepInfo, StepKind, noop_shared};
