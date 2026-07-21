@@ -23,9 +23,10 @@
 //! so operations that need genuine privilege (erofs mounts, host cgroup
 //! writes, host veth/nftables) are gated on [`RootlessContext::host_privileged`].
 
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::OnceLock;
 
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::mount::{MsFlags, mount};
 use nix::sched::{CloneFlags, unshare};
 use nix::sys::wait::waitpid;
@@ -196,6 +197,11 @@ fn apply_subordinate_maps(
     // status byte + (on failure) the helper's stderr.
     let (go_r, go_w) = pipe().map_err(|e| userns_error("create sync pipe", e))?;
     let (res_r, res_w) = pipe().map_err(|e| userns_error("create result pipe", e))?;
+    // Don't leak these into the setuid `newuidmap`/`newgidmap` the child execs.
+    // The child never execs itself, so CLOEXEC only closes them in the helper.
+    for fd in [&go_r, &go_w, &res_r, &res_w] {
+        let _ = fcntl(fd.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
+    }
 
     // SAFETY: single-threaded here (enter runs before any Tokio runtime), so
     // fork() is sound — no other thread can hold a lock the child would inherit.
@@ -206,7 +212,13 @@ fn apply_subordinate_maps(
             drop(go_w);
             drop(res_r);
             let mut go = [0u8; 1];
-            let _ = read(go_r.as_raw_fd(), &mut go); // block until the ns exists
+            let got = read(go_r.as_raw_fd(), &mut go).unwrap_or(0);
+            if got != 1 || go[0] != 1 {
+                // Parent early-returned (the unshare failed), so the namespace was
+                // never created — do not run the setuid helpers against a
+                // non-unshared parent. `_exit`, not `exit`: skip atexit/flush.
+                unsafe { nix::libc::_exit(1) };
+            }
             match run_id_helpers(getppid(), uid, gid, sub_uid, sub_gid) {
                 Ok(()) => {
                     let _ = write(&res_w, &[0u8]);
@@ -216,48 +228,72 @@ fn apply_subordinate_maps(
                     let _ = write(&res_w, msg.as_bytes());
                 }
             }
-            // `_exit`, not `exit`: skip atexit/flush — the child shares the
-            // parent's fds and buffers.
             unsafe { nix::libc::_exit(0) };
         }
         ForkResult::Parent { child } => {
             drop(go_r);
             drop(res_w);
-            // Unshare AFTER the fork so the child stays in the initial namespace.
-            unshare(CloneFlags::CLONE_NEWUSER)
-                .map_err(|e| userns_error("create user namespace", e))?;
-            write(&go_w, &[1u8]).map_err(|e| userns_error("signal map helper", e))?;
-            drop(go_w); // EOF for the child's read side
 
-            let mut status = [0u8; 1];
-            let n = read(res_r.as_raw_fd(), &mut status).unwrap_or(0);
-            let mut msg = Vec::new();
-            if n == 1 && status[0] != 0 {
-                let mut buf = [0u8; 512];
-                while let Ok(k) = read(res_r.as_raw_fd(), &mut buf) {
-                    if k == 0 || msg.len() > 8192 {
-                        break;
-                    }
-                    msg.extend_from_slice(&buf[..k]);
-                }
+            // If the unshare fails (e.g. userns restricted on this host) we are
+            // STILL in the host namespace: reap the helper (it sees EOF on `go`
+            // and exits) and return Err so the caller's best-effort startup hook
+            // can continue — a bootable build never needs the namespace.
+            if let Err(e) = unshare(CloneFlags::CLONE_NEWUSER) {
+                drop(go_w);
+                let _ = waitpid(child, None);
+                return Err(userns_error("create user namespace", e));
             }
-            let _ = waitpid(child, None);
 
-            if n != 1 || status[0] != 0 {
-                let detail = String::from_utf8_lossy(&msg);
-                let detail = if detail.trim().is_empty() {
-                    "the map helper exited abnormally".to_string()
-                } else {
-                    detail.into_owned()
-                };
-                return Err(EngineError::runtime(
-                    format!("rootless: applying the subordinate id map failed: {detail}"),
-                    None,
-                ));
+            // Past the unshare we are in a fresh, still-unmapped namespace with no
+            // way back to the host one, so failing to apply the map is FATAL:
+            // continuing would run the whole build as the overflow uid (`nobody`).
+            // Abort with the actionable error rather than returning it, which the
+            // CLI's best-effort startup hook would otherwise swallow.
+            if let Err(detail) = finish_subordinate_maps(&go_w, &res_r, child) {
+                eprintln!(
+                    "error: rootless: the user namespace was created but its \
+                     subordinate id map could not be applied, so the build cannot \
+                     continue: {detail}"
+                );
+                std::process::exit(1);
             }
             Ok(())
         }
     }
+}
+
+/// Signal the helper that the namespace exists, read its result, and reap it
+/// (always, so no zombie is left on a failure path). Returns the helper's error
+/// detail on failure. Runs only after the parent has successfully unshared.
+fn finish_subordinate_maps(go_w: &OwnedFd, res_r: &OwnedFd, child: Pid) -> Result<(), String> {
+    let go = write(go_w, &[1u8]).map_err(|e| format!("signalling the map helper: {e}"));
+
+    // Read status + optional stderr regardless of the go-write result, so the
+    // child is always reaped below.
+    let mut status = [0u8; 1];
+    let n = read(res_r.as_raw_fd(), &mut status).unwrap_or(0);
+    let mut msg = Vec::new();
+    if n == 1 && status[0] != 0 {
+        let mut buf = [0u8; 512];
+        while let Ok(k) = read(res_r.as_raw_fd(), &mut buf) {
+            if k == 0 || msg.len() > 8192 {
+                break;
+            }
+            msg.extend_from_slice(&buf[..k]);
+        }
+    }
+    let _ = waitpid(child, None);
+
+    go?;
+    if n != 1 || status[0] != 0 {
+        let detail = String::from_utf8_lossy(&msg);
+        return Err(if detail.trim().is_empty() {
+            "the map helper exited abnormally".to_string()
+        } else {
+            detail.into_owned()
+        });
+    }
+    Ok(())
 }
 
 /// Run `newuidmap` then `newgidmap` against `pid`, mapping container `0` to the

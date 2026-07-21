@@ -617,10 +617,10 @@ fn unpack_layer_into(blob: &[u8], dst: &Path) -> Result<(), EngineError> {
 /// the AUDIT/CHOWN/DAC/FOWNER/FSETID/KILL/MKNOD/NET_BIND/NET_RAW/SETFCAP
 /// /SETGID/SETPCAP/SETUID/SYS_CHROOT bounding set (the conventional
 /// container-runtime default). No CAP_SYS_ADMIN, no SYS_MODULE, no
-/// SYS_TIME. `noNewPrivileges` is on. The rootless path includes a
-/// user namespace with a single-id mapping (host uid → container uid
-/// 0); the rootful path drops the user namespace and assumes the
-/// runtime supplies root privileges.
+/// SYS_TIME. `noNewPrivileges` is on. The rootless library-consumer path
+/// includes a user namespace with the caller's full subordinate-id map (host
+/// uid → container `0`, plus the delegated range); the rootful path drops the
+/// user namespace and assumes the runtime supplies root privileges.
 fn build_runtime_spec(
     rootfs: &Path,
     image_config: &ImageConfigDoc,
@@ -734,9 +734,10 @@ fn build_runtime_spec(
                 .build()
                 .map_err(spec_build_error)?,
         );
-        // Prefer a two-entry sub-id map (see `rootless_id_mappings`) so a base
+        // The two-entry sub-id map (see `rootless_id_mappings`) so a base
         // image's non-root-owned files and `RUN --user <nonzero>` resolve to
-        // real ids; fall back to the safe single-id identity map otherwise.
+        // real ids. There is no single-id fallback: a missing delegation is a
+        // hard, actionable error rather than a silent degrade to `nobody`.
         let (uid_mappings, gid_mappings) =
             rootless_id_mappings(options.host_uid, options.host_gid)?;
         linux_builder = linux_builder
