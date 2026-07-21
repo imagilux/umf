@@ -411,6 +411,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#optional-lsm-confinement-apparmor-selinux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional LSM confinement (AppArmor / SELinux)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#optional-acceleration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -707,7 +718,7 @@
 </table>
 <p><code>umf doctor</code> can only read the <code>FORWARD</code> policy as root: a plain run prints <code>FORWARD policy: unknown</code>, while <code>sudo umf doctor</code> resolves it to <code>accept</code> or <code>DROP</code>. See <a href="../troubleshooting/#a-run-step-that-hits-the-network-aptapkcurl-hangs-or-fails">Troubleshooting → apt/apk in a RUN step hangs or fails</a> when egress misbehaves.</p>
 <h2 id="rootless-builds">Rootless builds<a class="headerlink" href="#rootless-builds" title="Permanent link">&para;</a></h2>
-<p>An unprivileged <code>umf build</code> (and container <code>umf run</code>) runs entirely inside one user namespace UMF enters at startup, with no helper subprocess. <code>umf doctor</code> reports a <strong>Rootless builds</strong> section. Building as root needs none of this.</p>
+<p>An unprivileged <code>umf build</code> (and container <code>umf run</code>) runs entirely inside one user namespace UMF enters at startup. <code>umf doctor</code> reports a <strong>Rootless builds</strong> section. Building as root needs none of this.</p>
 <table>
 <thead>
 <tr>
@@ -725,6 +736,12 @@
 <td>check <code>user.max_user_namespaces</code> &gt; 0 (unrestricted by default)</td>
 </tr>
 <tr>
+<td><strong><code>uidmap</code> + subid delegation</strong></td>
+<td>UMF maps the container's ids onto your delegated <code>/etc/subuid</code> + <code>/etc/subgid</code> range using the setuid <code>newuidmap</code>/<code>newgidmap</code> helpers. This is what makes <code>apt</code>/<code>dnf</code> (which drop to a sandbox user via <code>setgroups</code>), base-image files owned by non-root users, and <code>RUN --user &lt;nonzero&gt;</code> resolve to real ids. Without it a rootless <strong>container</strong> build fails with an actionable error (bootable and rootful builds don't need it).</td>
+<td><code>sudo apt-get install -y uidmap</code>, then <code>sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"</code></td>
+<td><code>sudo dnf install -y shadow-utils</code> (usually preinstalled); ensure <code>/etc/subuid</code>+<code>/etc/subgid</code> have a range (default on most installs)</td>
+</tr>
+<tr>
 <td><strong>systemd user session</strong> (cgroup v2 delegation)</td>
 <td>Rootless cgroup placement is <strong>systemd-dependent</strong>: UMF asks your user systemd, over its session bus, to create a delegated scope per <code>RUN</code> step. A login session already has one; a minimal host, a CI runner, or a non-login shell may not.</td>
 <td><code>sudo loginctl enable-linger "$(id -un)"</code>, or build from a login session</td>
@@ -738,7 +755,7 @@
 </tr>
 </tbody>
 </table>
-<p>Rootless <code>RUN</code> steps run with a <strong>single-id</strong> map (container root is your user; other ids resolve to <code>nobody</code>), detailed in <a href="../known-limitations/">Known limitations</a>. For network egress, see the next section.</p>
+<p>Rootless <code>RUN</code> steps run under a full subordinate-id map: container root is your user, and the rest of the container id space maps onto your delegated <code>/etc/subuid</code>/<code>/etc/subgid</code> range, so image files owned by non-root users and <code>RUN --user</code> resolve to real ids. For network egress, see the next section.</p>
 <h2 id="rootless-run-step-network-egress">Rootless RUN-step network egress<a class="headerlink" href="#rootless-run-step-network-egress" title="Permanent link">&para;</a></h2>
 <p>Rootless <code>RUN</code> steps reach the network through a userspace egress backend selected by <code>--rootless-net</code> (or <code>UMF_ROOTLESS_NET</code>; the flag wins). Three modes:</p>
 <table>
@@ -809,6 +826,23 @@
 <p><strong>Real-kernel boot is validated under QEMU/KVM</strong>: a CI boot-smoke test builds, compiles, and boots a minimal image to a userspace marker. Bare-metal-specific hardware is not separately tested; the projected UEFI disk is byte-identical either way. See <a href="../known-limitations/">Known limitations</a>.</p>
 </blockquote>
 <p>The <strong>Cloud Hypervisor</strong> backend (<code>--vmm=ch</code>) is an alternative to QEMU. For a raw <code>--disk</code> boot it requires an explicit <code>--firmware</code> path (the raw-disk path discovers no firmware); a bootable image run auto-discovers OVMF the same way QEMU does. Its <code>-p/--port-forward</code> is wired host-side (a per-VM netns + tap + nft DNAT, pure-Rust with no <code>iproute2</code>), so it additionally needs <strong><code>nft</code></strong> on <code>PATH</code>, plus <strong><code>dnsmasq</code></strong> for the default in-namespace DHCP (not required if you pass <code>--dhcp-command</code> to run your own DHCP daemon, or <code>--dhcp-command none</code>); <code>umf doctor</code> reports them. See <a href="../known-limitations/">Known limitations</a>.</p>
+<h2 id="optional-lsm-confinement-apparmor-selinux">Optional LSM confinement (AppArmor / SELinux)<a class="headerlink" href="#optional-lsm-confinement-apparmor-selinux" title="Permanent link">&para;</a></h2>
+<p>Not required. Container RUN steps are already contained by seccomp, a dropped
+capability set, a user namespace, and masked/read-only paths; an LSM profile is
+an extra defence-in-depth layer, applied only when the host provides one and
+skipped cleanly otherwise (so absence never breaks a build).</p>
+<ul>
+<li><strong>AppArmor</strong>: load the shipped profile once, and UMF applies it to every RUN
+  step automatically:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sudo<span class="w"> </span>apparmor_parser<span class="w"> </span>-r<span class="w"> </span>-W<span class="w"> </span>crates/umf-engine/resources/apparmor/umf-default
+</code></pre></div>
+<p>Point UMF at a different loaded profile with <code>UMF_APPARMOR_PROFILE=&lt;name&gt;</code>, or
+  set it to <code>unconfined</code> to disable. UMF does not load the profile itself
+  (loading needs init-namespace privilege).
+- <strong>SELinux</strong>: on an enforcing host, supply the process/mount labels with
+  <code>UMF_SELINUX_LABEL=&lt;context&gt;</code> and <code>UMF_SELINUX_MOUNT_LABEL=&lt;context&gt;</code>; they are
+  ignored on a non-enforcing host.</p>
 <h2 id="optional-acceleration">Optional acceleration<a class="headerlink" href="#optional-acceleration" title="Permanent link">&para;</a></h2>
 <p>Not required for any build; it only makes <strong>warm</strong> rebuilds faster.</p>
 <table>
@@ -848,7 +882,7 @@
 </tr>
 <tr>
 <td>Build/run <strong>containers rootless</strong> (non-root)</td>
-<td>unprivileged user namespaces enabled + a systemd user session</td>
+<td>unprivileged user namespaces enabled + <code>uidmap</code> + <code>/etc/subuid</code>,<code>subgid</code> delegation + a systemd user session</td>
 </tr>
 <tr>
 <td>Rootless <code>RUN</code> steps that fetch packages (default <code>native</code> backend)</td>
