@@ -47,7 +47,19 @@ jobs:
       - name: Install host deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev
+          sudo apt-get install -y libseccomp-dev uidmap
+
+      - name: Delegate subordinate ids for the rootless map
+        # A rootless container build maps the container id space onto the user's
+        # /etc/subuid + /etc/subgid range via newuidmap/newgidmap (installed
+        # above). Ensure the runner user has a grant (idempotent: skip if a line
+        # already exists, e.g. from the runner's preinstalled Docker).
+        run: |
+          user="$(id -un)"
+          grep -q "^${user}:" /etc/subuid || echo "${user}:100000:65536" | sudo tee -a /etc/subuid
+          grep -q "^${user}:" /etc/subgid || echo "${user}:100000:65536" | sudo tee -a /etc/subgid
+          echo "subuid: $(grep "^${user}:" /etc/subuid)"
+          echo "subgid: $(grep "^${user}:" /etc/subgid)"
 
       - name: Permit unprivileged user namespaces
         # Ubuntu 24.04 runners restrict unprivileged userns via AppArmor; the
