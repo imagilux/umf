@@ -23,7 +23,7 @@
 # its path via the UMF_BIN build arg. Grab one from a GitHub Release
 # (musl target, statically linked):
 #
-#   v=v2.7.0; t=x86_64-unknown-linux-musl
+#   v=v0.0.1; t=x86_64-unknown-linux-musl
 #   curl -fsSL "https://github.com/imagilux/umf/releases/download/$v/umf-${v#v}-$t.tar.gz" \
 #     | tar -xz --strip-components=1 "umf-${v#v}-$t/umf"
 #   podman build -t umf:latest .
