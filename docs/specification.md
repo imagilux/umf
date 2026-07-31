@@ -347,7 +347,7 @@ RUN --mount=type=secret,id=<id>,target=<path> <command>
 Single source-to-destination copy primitive. The source **type** is auto-detected from its form (in this order):
 
 - an explicit scheme: `oci://<ref>` or `https+oci://<ref>` is an **OCI image**, resolved through the same `registry → cache → source` chain `FROM` uses;
-- `http://` or `https://` is a **remote blob** (a URL); the resource is fetched and, if it's a recognised archive, extracted to the destination (the implementation unpacks `.tar` and `.tar.gz` today; `.tar.xz` and `.zip` are specified but not yet extracted, see [Known limitations](known-limitations.md#add-url-archive-coverage));
+- `http://` or `https://` is a **remote blob** (a URL); the resource is fetched and, if it's a recognised archive, extracted to the destination — tar (plain or gzip/zstd/xz/bzip2-compressed) and zip are the recognised archive set (a squashfs payload is rejected as a filesystem image, and a compressed payload must wrap a tar; see [Known limitations](known-limitations.md#add-url-archive-coverage));
 - a `./`, `../`, `/`, or `~/`-prefixed source is a **local path** (file or directory in the build context);
 - a bare source carrying a `:tag` or `@digest` (e.g. `debian:bookworm`, `registry.example.com/rootfs:1.0`, `name@sha256:…`) is an **OCI image** by shape heuristic. A leading `/` alone is **not** a signal here, local paths have one too; for a bare-name image with no tag, use the explicit `oci://<name>` form.
 
