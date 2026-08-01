@@ -45,6 +45,11 @@ allow = [
     # Apache-2.0 distribution. Pulled in transitively via `xxhash-rust`
     # (squashfs ROOTFS writer via `backhand`).
     "BSL-1.0",
+    # The bzip2 license — BSD-3-Clause-style permissive (attribution +
+    # no-endorsement + no-warranty), GPL- and Apache-2.0-compatible. Carried
+    # by `libbz2-rs-sys`, the pure-Rust bzip2 backend behind the `bzip2`
+    # crate (`.tar.bz2` extraction for `ADD <url>` payloads).
+    "bzip2-1.0.6",
 ]
 confidence-threshold = 0.93
 

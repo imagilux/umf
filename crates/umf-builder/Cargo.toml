@@ -39,6 +39,12 @@ umf-parser = { workspace = true }
 # Round-trip tests boot an in-process OCI distribution v2 server
 # instead of `registry:2` via podman — see umf_oci::test_registry.
 umf-oci = { workspace = true, features = ["test-server"] }
+# The `ADD <url>` tests build compressed-tar / zip payloads in memory to
+# exercise each codec the staging unpacker extracts.
+bzip2 = { workspace = true }
+liblzma = { workspace = true }
+zip = { workspace = true }
+zstd = { workspace = true }
 
 [lints]
 workspace = true

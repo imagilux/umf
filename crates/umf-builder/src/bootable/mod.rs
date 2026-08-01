@@ -137,21 +137,24 @@ pub enum BootableBuildError {
         detail: String,
     },
 
-    /// An `ADD <url>` payload sniffed as a compressed archive format the
-    /// bootable target can't extract — only tar / tar.gz, or a plain file.
+    /// An `ADD <url>` payload sniffed as a format the bootable target does
+    /// not extract (squashfs — a filesystem image, not an archive). tar
+    /// (plain or gzip/zstd/xz/bzip2-compressed) and zip extract; anything
+    /// unrecognised is placed as a plain file.
     #[error(
-        "ADD <url> ({url}): {format} archives are not supported \
-         (provide a tar / tar.gz archive, or a plain file)"
+        "ADD <url> ({url}): a {format} filesystem image is not extracted \
+         (provide a tar — optionally compressed —, a zip, or a plain file)"
     )]
     AddUrlArchiveUnsupported {
-        /// The URL whose payload was an unsupported archive.
+        /// The URL whose payload was an unsupported format.
         url: String,
         /// The sniffed format name.
         format: String,
     },
 
-    /// Extracting an `ADD <url>` tar / tar.gz into staging failed — the payload
-    /// sniffed as an archive but wasn't a valid one.
+    /// Extracting an `ADD <url>` archive into staging failed — the payload
+    /// sniffed as an archive but wasn't a valid one (a compressed stream
+    /// wrapping no tar, a corrupt or hostile archive).
     #[error("ADD <url> extract ({url}, {format}): {detail}")]
     AddUrlExtract {
         /// The URL whose payload failed extraction.
@@ -866,10 +869,10 @@ fn add_from_stage_into_staging(
 /// huge payload never sits in memory), then sniffs the payload by magic
 /// number:
 ///
-/// - **tar / tar.gz** — extracted into `dst` through the same staging machinery
-///   the OCI userland unpack uses (gzip decode + path-traversal containment).
-/// - **other compressed archives** (zstd / xz / bzip2 / squashfs) — rejected;
-///   provide a tar / tar.gz or a plain file.
+/// - **tar (plain or gzip/zstd/xz/bzip2-compressed) / zip** — extracted into
+///   `dst` through the same staging machinery the OCI userland unpack uses
+///   (codec decode + path-traversal containment + decompression cap).
+/// - **squashfs** — rejected; it is a filesystem image, not an archive.
 /// - **anything else** — a plain file at `dst`, with docker's trailing-slash
 ///   rule (a `dst/` takes the URL's leaf name).
 async fn add_url_into_staging(
@@ -890,23 +893,28 @@ async fn add_url_into_staging(
     let format = sniff_format(fetched.file.path())?;
 
     match format {
-        Format::Tar | Format::Gzip => {
-            // Extract through a scratch staging (decode + traversal
-            // containment), then copy its tree under dst — the same guarantees
-            // the userland unpack relies on. A `.gz` that is not actually a
-            // gzipped tar, or a corrupt archive, surfaces as a clear error.
+        Format::Tar | Format::Gzip | Format::Zstd | Format::Xz | Format::Bzip2 | Format::Zip => {
+            // Extract through a scratch staging (codec decode + traversal
+            // containment; the zip container goes through its path-based
+            // entry point), then copy its tree under dst — the same
+            // guarantees the userland unpack relies on. A compressed stream
+            // that does not actually wrap a tar, or a corrupt archive,
+            // surfaces as a clear error.
             let mut scratch = BuildStaging::new()?;
-            scratch.unpack_tarball(fetched.file.path()).map_err(|e| {
-                BootableBuildError::AddUrlExtract {
-                    url: url.to_string(),
-                    format: format.as_str().to_string(),
-                    detail: e.to_string(),
-                }
+            let unpacked = if format == Format::Zip {
+                scratch.unpack_zip(fetched.file.path())
+            } else {
+                scratch.unpack_tarball(fetched.file.path())
+            };
+            unpacked.map_err(|e| BootableBuildError::AddUrlExtract {
+                url: url.to_string(),
+                format: format.as_str().to_string(),
+                detail: e.to_string(),
             })?;
             let dst_dir = crate::fsutil::contained_write_path(staging.path(), dst)?;
             crate::fsutil::copy_dir_recursive(scratch.path(), &dst_dir)?;
         }
-        Format::Zstd | Format::Xz | Format::Bzip2 | Format::Squashfs => {
+        Format::Squashfs => {
             return Err(BootableBuildError::AddUrlArchiveUnsupported {
                 url: url.to_string(),
                 format: format.as_str().to_string(),

@@ -12,11 +12,10 @@ A few of these are gaps between the **normative spec** (which describes the inte
 
 ### `ADD <url>` archive coverage
 
-`ADD <url>` fetches the payload (size-capped, re-fetched every build with the layer cache keyed on the payload digest) and extracts archives sniffed as **tar** or **tar.gz**; anything unrecognised, **`.zip` included** (it sniffs as an opaque payload), is placed as a plain file rather than extracted. Payloads sniffing as **xz / bzip2 / zstd / squashfs** are rejected with *fetched payload is a … archive, which is not extracted yet*.
+`ADD <url>` fetches the payload (size-capped, re-fetched every build with the layer cache keyed on the payload digest) and extracts every archive family the sniffer recognises: **tar** — plain or **gzip / zstd / xz / bzip2**-compressed — and **zip**. Anything unrecognised is placed as a plain file rather than extracted. Two edges remain:
 
-- **Spec vs. impl.** The [ADD](specification.md#add) directive lists `.tar.xz` and `.zip` among the recognised archives; the engine extracts tar and tar.gz today.
-- **A gzip source must wrap a tar.** Because the payload is fingerprinted by magic number, a gzip stream is always treated as a gzipped *tar*: a lone `.gz` of a single file, or a corrupt archive, fails the build with *could not be extracted as a tar archive* rather than landing as a plain file. Decompress it and `ADD` the result, or serve the content uncompressed.
-- **Workaround.** Repackage the resource as tar/tar.gz, or pre-extract it into the build context.
+- **squashfs is rejected, by design.** A payload sniffing as **squashfs** fails with *fetched payload is a squashfs filesystem image, which is not extracted*: it is a filesystem image, not an archive, and projecting one into a layer is not a well-defined extraction. Unpack it (`unsquashfs`) and repackage the tree as tar or zip.
+- **A compressed source must wrap a tar.** Because the payload is fingerprinted by magic number, a gzip / zstd / xz / bzip2 stream is always treated as a compressed *tar*: a lone `.gz` (or `.zst` / `.xz` / `.bz2`) of a single file, or a corrupt archive, fails the build with *could not be extracted* rather than landing as a plain file. Decompress it and `ADD` the result, or serve the content uncompressed.
 
 ### SBOM package scanning
 
@@ -79,4 +78,4 @@ Use `--vmm=qemu` (the default) for auto-discovered firmware, or a guest image th
 
 ## OCI layer encoding
 
-`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`. On the **read** side UMF transparently applies gzip-, zstd-, and uncompressed-tar layers; the build-staging unpacker is narrower and accepts gzip or plain tar only (a zstd/xz/bzip2-compressed staging archive is rejected: *staging unpacks gzip or plain tar only*). gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).
+`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`. On the **read** side UMF transparently applies gzip-, zstd-, and uncompressed-tar layers, and the build-staging unpacker additionally decodes xz- and bzip2-compressed tars (for fetched `ADD <url>` payloads — a layer blob is never xz/bzip2). gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).

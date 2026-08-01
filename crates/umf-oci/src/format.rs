@@ -24,6 +24,9 @@ pub enum Format {
     Bzip2,
     /// Uncompressed POSIX/ustar tar (the `ustar` magic at offset 257).
     Tar,
+    /// Zip archive (`PK\x03\x04` local-file header, or `PK\x05\x06` for an
+    /// empty archive's end-of-central-directory record).
+    Zip,
     /// SquashFS image (`hsqs` little-endian / `sqsh` big-endian superblock).
     Squashfs,
     /// No recognised archive/image magic — treat as a raw file.
@@ -47,6 +50,7 @@ impl Format {
             Self::Xz => "xz",
             Self::Bzip2 => "bzip2",
             Self::Tar => "tar",
+            Self::Zip => "zip",
             Self::Squashfs => "squashfs",
             Self::Unknown => "unknown",
         }
@@ -70,6 +74,8 @@ pub fn detect(bytes: &[u8]) -> Format {
         Format::Xz
     } else if bytes.starts_with(b"BZh") {
         Format::Bzip2
+    } else if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
+        Format::Zip
     } else if bytes.starts_with(b"hsqs") || bytes.starts_with(b"sqsh") {
         Format::Squashfs
     } else if is_tar(bytes) {

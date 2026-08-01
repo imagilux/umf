@@ -46,6 +46,16 @@ fn detect_squashfs_both_endians() {
 }
 
 #[test]
+fn detect_zip_local_header_and_empty_archive() {
+    // Local-file header: how every non-empty zip starts.
+    assert_eq!(detect(b"PK\x03\x04\x14\x00"), Format::Zip);
+    // A zero-entry zip is just its end-of-central-directory record.
+    assert_eq!(detect(b"PK\x05\x06\x00\x00"), Format::Zip);
+    // A bare "PK" without a record signature is not a zip.
+    assert_eq!(detect(b"PKWARE"), Format::Unknown);
+}
+
+#[test]
 fn detect_real_tar_and_gzipped_tar() {
     let tar = tar_with(&[("etc/os-release", b"NAME=x")]);
     assert_eq!(detect(&tar), Format::Tar);
@@ -67,7 +77,8 @@ fn is_compressed_only_for_wrappers() {
     for f in [Format::Gzip, Format::Zstd, Format::Xz, Format::Bzip2] {
         assert!(f.is_compressed(), "{f:?}");
     }
-    for f in [Format::Tar, Format::Squashfs, Format::Unknown] {
+    // Zip is a container with its own index, not a compression wrapper.
+    for f in [Format::Tar, Format::Zip, Format::Squashfs, Format::Unknown] {
         assert!(!f.is_compressed(), "{f:?}");
     }
 }

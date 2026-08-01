@@ -18,7 +18,9 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
+use liblzma::read::XzDecoder;
 use tempfile::TempDir;
 use thiserror::Error;
 use tracing::debug;
@@ -32,10 +34,28 @@ pub enum StagingError {
     #[error("unpacking tar: {0}")]
     Unpack(#[source] io::Error),
 
-    /// The archive is compressed with a codec the staging unpacker can't
-    /// decompress (only gzip and uncompressed tar are supported).
-    #[error("unsupported archive compression `{0}` (staging unpacks gzip or plain tar only)")]
-    UnsupportedCompression(&'static str),
+    /// The stream is a recognised format that is not a tar and cannot be
+    /// unpacked as one (a zip, which is a seekable container — route it
+    /// through [`BuildStaging::unpack_zip`] — or a squashfs image).
+    #[error(
+        "`{0}` payload cannot be unpacked as a tar stream (staging accepts \
+         plain tar, or gzip/zstd/xz/bzip2-compressed tar)"
+    )]
+    NotATar(&'static str),
+
+    /// Zip archive unpacking failed (corrupt central directory, bad entry,
+    /// unsupported entry codec, …).
+    #[error("unpacking zip: {0}")]
+    Zip(#[from] zip::result::ZipError),
+
+    /// A zip entry would land outside the extraction root — an absolute
+    /// name, a `..` component, or a symlink whose placement resolves out of
+    /// the tree. The archive is malformed or hostile; refused, not skipped.
+    #[error("zip entry `{name}` escapes the extraction root")]
+    ZipEntryEscape {
+        /// The offending entry name as stored in the archive.
+        name: String,
+    },
 
     /// I/O error opening or reading a tarball source path.
     #[error("I/O: {0}")]
@@ -75,28 +95,29 @@ impl BuildStaging {
         self.dir.keep()
     }
 
-    /// Unpack a (possibly gzipped) tar archive sitting at `tarball_path`
+    /// Unpack a (possibly compressed) tar archive sitting at `tarball_path`
     /// into the staging tree.
     ///
-    /// Detects gzip by checking for the magic bytes and transparently
-    /// decompresses on the fly. Used for ROOTFS minirootfs tarballs from
-    /// upstream distros + registry-cached rootfs artifacts.
+    /// The compression codec — gzip, zstd, xz, or bzip2 — is fingerprinted
+    /// from the leading magic bytes and decoded transparently on the fly.
+    /// Used for ROOTFS minirootfs tarballs from upstream distros,
+    /// registry-cached rootfs artifacts, and fetched `ADD <url>` payloads.
     pub fn unpack_tarball(&mut self, tarball_path: &Path) -> Result<(), StagingError> {
         let file = File::open(tarball_path)?;
         self.unpack_tar_stream(file)
     }
 
-    /// Unpack a (possibly gzipped) tar archive from an in-memory byte slice.
-    /// Useful for tests that don't want to round-trip through a file.
+    /// Unpack a (possibly compressed) tar archive from an in-memory byte
+    /// slice. Useful for tests that don't want to round-trip through a file.
     pub fn unpack_tar_bytes(&mut self, bytes: &[u8]) -> Result<(), StagingError> {
         self.unpack_tar_stream(bytes)
     }
 
     fn unpack_tar_stream<R: Read>(&self, source: R) -> Result<(), StagingError> {
         // Peek the leading bytes (enough for the longest compression magic, xz
-        // at 6) and fingerprint via `format::detect`, so we route gzip to the
-        // decoder, reject a compression we can't decompress with a clear error,
-        // and otherwise treat the stream as a plain tar.
+        // at 6) and fingerprint via `format::detect`, so we route each codec
+        // to its decoder, reject a stream that can't be a tar with a clear
+        // error, and otherwise treat the stream as a plain tar.
         let mut reader = std::io::BufReader::new(source);
         let mut peek = [0u8; 6];
         let peeked = crate::materialize::read_full(&mut reader, &mut peek)?;
@@ -107,19 +128,128 @@ impl BuildStaging {
         // reader.
         let combined = std::io::Read::chain(&peek[..peeked], reader);
 
-        // Cap the decompressed byte count so a gzip bomb can't fill the disk
-        // (mirrors `materialize::apply_layer`).
+        // Cap the decompressed byte count so a decompression bomb can't fill
+        // the disk (mirrors `materialize::apply_layer`).
+        use crate::format::Format;
+        use crate::materialize::CappedReader;
         let cap = crate::materialize::max_uncompressed_layer_bytes();
         match format {
-            crate::format::Format::Gzip => self.unpack_tar_into_staging(
-                crate::materialize::CappedReader::new(GzDecoder::new(combined), cap),
-            ),
+            Format::Gzip => {
+                self.unpack_tar_into_staging(CappedReader::new(GzDecoder::new(combined), cap))
+            }
+            Format::Zstd => self.unpack_tar_into_staging(CappedReader::new(
+                zstd::stream::read::Decoder::new(combined)?,
+                cap,
+            )),
+            Format::Xz => {
+                self.unpack_tar_into_staging(CappedReader::new(XzDecoder::new(combined), cap))
+            }
+            Format::Bzip2 => {
+                self.unpack_tar_into_staging(CappedReader::new(BzDecoder::new(combined), cap))
+            }
+            // A zip is a seekable container (its index lives at the end of the
+            // file), not a stream — [`Self::unpack_zip`] is its entry point.
+            Format::Zip => Err(StagingError::NotATar("zip")),
+            Format::Squashfs => Err(StagingError::NotATar("squashfs")),
             // A 6-byte prefix can't see the `ustar` magic at offset 257, so a
             // plain tar reads as `Unknown` here — that's fine, it falls through
             // to the uncompressed-tar branch below.
-            f if f.is_compressed() => Err(StagingError::UnsupportedCompression(f.as_str())),
-            _ => self.unpack_tar_into_staging(crate::materialize::CappedReader::new(combined, cap)),
+            Format::Tar | Format::Unknown => {
+                self.unpack_tar_into_staging(CappedReader::new(combined, cap))
+            }
         }
+    }
+
+    /// Unpack a zip archive sitting at `zip_path` into the staging tree.
+    ///
+    /// A zip's index (the central directory) lives at the *end* of the file,
+    /// so unlike the tar path this reads from a seekable path, not a stream.
+    /// The tar unpack's guarantees hold here too: entry names are contained
+    /// (an absolute or `..`-escaping name fails the unpack rather than being
+    /// skipped), the cumulative decompressed byte count is capped so a zip
+    /// bomb can't fill the disk, and unix permission bits are preserved when
+    /// the archive carries them (same supply-chain stance as the tar path's
+    /// `set_preserve_permissions`). Symlink entries are created only after
+    /// every regular file has landed, so no file write can be redirected
+    /// through an archive-controlled link; link *targets* are stored as-is
+    /// (they resolve inside the image at runtime, exactly as tar symlinks
+    /// do), while the link's own placement is re-checked against the root.
+    pub fn unpack_zip(&mut self, zip_path: &Path) -> Result<(), StagingError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const S_IFMT: u32 = 0o170000;
+        const S_IFLNK: u32 = 0o120000;
+
+        let file = File::open(zip_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+
+        // One cumulative ceiling across the whole archive — the tar paths cap
+        // their single decompressed stream the same way.
+        let mut remaining = crate::materialize::max_uncompressed_layer_bytes();
+        // Deferred symlinks: (name as stored, destination, link target).
+        let mut symlinks: Vec<(String, PathBuf, PathBuf)> = Vec::new();
+
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            // Containment: `enclosed_name` refuses absolute names, `..`
+            // components, and NUL bytes.
+            let Some(rel) = entry.enclosed_name() else {
+                return Err(StagingError::ZipEntryEscape {
+                    name: entry.name().to_string(),
+                });
+            };
+            let dest = self.dir.path().join(&rel);
+
+            if entry.is_dir() {
+                std::fs::create_dir_all(&dest)?;
+                continue;
+            }
+
+            let mode = entry.unix_mode();
+            if mode.is_some_and(|m| m & S_IFMT == S_IFLNK) {
+                // The entry body is the link target; cap the read at a
+                // PATH_MAX-ish bound so a bogus header can't balloon it.
+                let mut target = String::new();
+                (&mut entry).take(4096).read_to_string(&mut target)?;
+                symlinks.push((entry.name().to_string(), dest, PathBuf::from(target)));
+                continue;
+            }
+
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut out = File::create(&dest)?;
+            let copied = io::copy(
+                &mut crate::materialize::CappedReader::new(&mut entry, remaining),
+                &mut out,
+            )
+            .map_err(StagingError::Unpack)?;
+            remaining -= copied;
+            if let Some(m) = mode {
+                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(m & 0o7777))?;
+            }
+        }
+
+        // Symlinks land last, so none of the file writes above could have
+        // traversed one. Placement is still contained: with links now able to
+        // appear under other links, canonicalize each parent and require it
+        // to stay inside the staging root.
+        let root = self.dir.path().canonicalize()?;
+        for (name, dest, target) in symlinks {
+            let parent = dest.parent().unwrap_or(&root);
+            std::fs::create_dir_all(parent)?;
+            if !parent.canonicalize()?.starts_with(&root) {
+                return Err(StagingError::ZipEntryEscape { name });
+            }
+            // Last-writer-wins on a colliding earlier entry, as tar has.
+            match std::fs::remove_file(&dest) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+            std::os::unix::fs::symlink(&target, &dest)?;
+        }
+        Ok(())
     }
 
     fn unpack_tar_into_staging<R: Read>(&self, source: R) -> Result<(), StagingError> {

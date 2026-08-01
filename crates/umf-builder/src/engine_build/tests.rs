@@ -559,10 +559,11 @@ async fn add_url_fetch_failure_is_a_clear_error() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_unsupported_archive_is_a_clear_error() {
-    // A zstd frame: sniffable, but not extractable yet.
-    let zstd_magic = vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00];
-    let url = spawn_http("200 OK", zstd_magic);
-    let src = format!("FROM scratch\nADD {url}/payload.tar.zst /\n");
+    // A squashfs superblock: sniffable, but a filesystem image — never
+    // extracted (every archive format the sniffer knows extracts natively).
+    let squashfs_magic = b"hsqs\x00\x00\x00\x00".to_vec();
+    let url = spawn_http("200 OK", squashfs_magic);
+    let src = format!("FROM scratch\nADD {url}/rootfs.squashfs /\n");
     let ast = parse(&src).expect("parse");
     let layout_dir = TempDir::new().unwrap();
     let layout = ImageLayout::init(layout_dir.path()).unwrap();
@@ -575,10 +576,135 @@ async fn add_url_unsupported_archive_is_a_clear_error() {
         &EngineBuildOptions::default(),
     )
     .await
-    .expect_err("an unsupported archive must fail clearly");
+    .expect_err("an unsupported payload must fail clearly");
     assert!(
         matches!(err, EngineBuildError::AddUrlArchiveUnsupported { .. }),
         "expected AddUrlArchiveUnsupported, got {err:?}",
+    );
+}
+
+/// One-file tar built in memory, compressed by `wrap`.
+fn compressed_tar_payload(
+    path_in_tar: &str,
+    contents: &[u8],
+    wrap: impl FnOnce(&[u8]) -> Vec<u8>,
+) -> Vec<u8> {
+    let mut tar_bytes = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_bytes);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path_in_tar, contents)
+            .unwrap();
+        builder.finish().unwrap();
+    }
+    wrap(&tar_bytes)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_url_extracts_zstd_xz_bzip2_tars_and_zip() {
+    use std::io::Write as _;
+    use umf_engine::bundle::{Bundle, BundleOptions};
+
+    let zst_url = spawn_http(
+        "200 OK",
+        compressed_tar_payload("etc/from-zst.conf", b"zst\n", |t| {
+            zstd::stream::encode_all(t, 3).unwrap()
+        }),
+    );
+    let xz_url = spawn_http(
+        "200 OK",
+        compressed_tar_payload("etc/from-xz.conf", b"xz\n", |t| {
+            let mut enc = liblzma::write::XzEncoder::new(Vec::new(), 6);
+            enc.write_all(t).unwrap();
+            enc.finish().unwrap()
+        }),
+    );
+    let bz_url = spawn_http(
+        "200 OK",
+        compressed_tar_payload("etc/from-bz2.conf", b"bz2\n", |t| {
+            let mut enc = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            enc.write_all(t).unwrap();
+            enc.finish().unwrap()
+        }),
+    );
+    let zip_url = {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        writer.start_file("etc/from-zip.conf", opts).unwrap();
+        writer.write_all(b"zip\n").unwrap();
+        spawn_http("200 OK", writer.finish().unwrap().into_inner())
+    };
+
+    let src = format!(
+        "FROM scratch\n\
+         ADD {zst_url}/bundle.tar.zst /\n\
+         ADD {xz_url}/bundle.tar.xz /\n\
+         ADD {bz_url}/bundle.tar.bz2 /\n\
+         ADD {zip_url}/bundle.zip /\n"
+    );
+    let ast = parse(&src).expect("parse");
+    let layout_dir = TempDir::new().unwrap();
+    let layout = ImageLayout::init(layout_dir.path()).unwrap();
+    let context = TempDir::new().unwrap();
+    build_single_stage(
+        &layout,
+        context.path(),
+        &ast,
+        "example.invalid/from-archives:1",
+        &EngineBuildOptions::default(),
+    )
+    .await
+    .expect("every archive family the spec recognises extracts");
+
+    let built = Bundle::from_image(
+        &layout,
+        "example.invalid/from-archives:1",
+        &BundleOptions::default(),
+    )
+    .expect("bundle the built image");
+    for (leaf, want) in [
+        ("from-zst.conf", &b"zst\n"[..]),
+        ("from-xz.conf", &b"xz\n"[..]),
+        ("from-bz2.conf", &b"bz2\n"[..]),
+        ("from-zip.conf", &b"zip\n"[..]),
+    ] {
+        assert_eq!(
+            std::fs::read(built.rootfs().join("etc").join(leaf)).unwrap(),
+            want,
+            "{leaf} extracted to /etc",
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_url_zstd_that_is_not_a_tar_is_a_clear_error() {
+    // A zstd stream wrapping a plain string, not a tar. The magic marks it
+    // for extraction (a compressed payload must wrap a tar), so it must fail
+    // with a clear extract error rather than landing as a file.
+    let payload = zstd::stream::encode_all(&b"i am not a tar\n"[..], 3).unwrap();
+    let url = spawn_http("200 OK", payload);
+
+    let src = format!("FROM scratch\nADD {url}/data.zst /opt/\n");
+    let ast = parse(&src).expect("parse");
+    let layout_dir = TempDir::new().unwrap();
+    let layout = ImageLayout::init(layout_dir.path()).unwrap();
+    let context = TempDir::new().unwrap();
+    let err = build_single_stage(
+        &layout,
+        context.path(),
+        &ast,
+        "example.invalid/x:1",
+        &EngineBuildOptions::default(),
+    )
+    .await
+    .expect_err("a zstd non-tar must fail clearly");
+    assert!(
+        matches!(err, EngineBuildError::AddUrlExtractFailed { .. }),
+        "expected AddUrlExtractFailed, got {err:?}",
     );
 }
 

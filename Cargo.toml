@@ -136,6 +136,17 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # `default-features = false` keeps the bundled libzstd C build off the
 # multithreading + zdict surface we don't use; gzip stays the default codec.
 zstd = { version = "0.13", default-features = false }
+# xz + bzip2 decompression for `ADD <url>` tar payloads (umf-oci staging).
+# `liblzma` is the maintained xz2 fork and is already in-tree transitively
+# through backhand's xz feature; `bzip2`'s default backend is the pure-Rust
+# `libbz2-rs-sys`, so neither adds a system-library requirement.
+liblzma = "0.4"
+bzip2 = "0.6"
+# `.zip` extraction for `ADD <url>` payloads (umf-oci staging). Default
+# features stay off to keep the writer-side codecs (zopfli, aes, lzma, …)
+# out of the tree; `deflate-flate2` decodes the deflate entries real-world
+# zips use, over the same flate2 the gzip path already links.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 http = "1"
 # Standard-alphabet base64 — decodes the `auth` field of
 # `~/.docker/config.json` in umf-oci's registry-auth resolver.

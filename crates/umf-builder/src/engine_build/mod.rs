@@ -137,12 +137,13 @@ pub enum EngineBuildError {
         detail: String,
     },
 
-    /// An `ADD <url>` payload sniffed as an archive format the engine
-    /// cannot extract yet (xz / bzip2 / zstd / zip). tar and tar.gz
-    /// extract natively; anything unrecognised is placed as a plain file.
+    /// An `ADD <url>` payload sniffed as a format the engine does not
+    /// extract (squashfs — a filesystem image, not an archive). tar (plain
+    /// or gzip/zstd/xz/bzip2-compressed) and zip extract natively; anything
+    /// unrecognised is placed as a plain file.
     #[error(
-        "ADD {url}: fetched payload is a {format} archive, which is not extracted yet — \
-        pre-extract it, or repackage as tar/tar.gz"
+        "ADD {url}: fetched payload is a {format} filesystem image, which is not extracted — \
+        repackage the contents as tar (optionally compressed) or zip"
     )]
     AddUrlArchiveUnsupported {
         /// The URL the directive asked for.
@@ -151,19 +152,23 @@ pub enum EngineBuildError {
         format: String,
     },
 
-    /// An `ADD <url>` payload sniffed as tar / gzip but could not be
-    /// extracted as a (optionally gzipped) tar: a lone `.gz` of a single
-    /// file, or a corrupt archive. The gzip magic marks the payload as a
-    /// compressed archive (the spec fingerprints by magic number, never by
-    /// extension), so it is extracted rather than placed as a file.
+    /// An `ADD <url>` payload sniffed as an extractable archive but could
+    /// not be extracted: a compressed stream wrapping no tar (a lone `.gz`
+    /// / `.xz` / `.zst` / `.bz2` of a single file), a corrupt archive, or a
+    /// hostile one (an escaping entry, a decompression bomb). The magic
+    /// number marks the payload as an archive (the spec fingerprints by
+    /// magic number, never by extension), so it is extracted rather than
+    /// placed as a file.
     #[error(
-        "ADD {url}: the fetched {format} payload could not be extracted as a tar archive: \
-        {detail}. Use a plain-file source, or repackage the content as tar / tar.gz."
+        "ADD {url}: the fetched {format} payload could not be extracted: {detail}. \
+        A compressed payload must wrap a tar archive; use a plain-file source, or \
+        repackage the content as tar (optionally gzip/zstd/xz/bzip2-compressed) or zip."
     )]
     AddUrlExtractFailed {
         /// The URL the directive asked for.
         url: String,
-        /// The sniffed format name (`tar` or `gzip`).
+        /// The sniffed format name (`tar`, `gzip`, `zstd`, `xz`, `bzip2`,
+        /// or `zip`).
         format: String,
         /// The underlying extraction failure.
         detail: String,

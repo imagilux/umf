@@ -113,24 +113,25 @@ UMF is UEFI-only and needs an OVMF/EDK II firmware blob to boot a compiled disk.
 
 `FROM scratch` starts from a genuinely empty filesystem, so the first `RUN` has no shell — or any binary — to execute, and fails at exec the same way docker's does. `ADD` the tooling first (a static busybox, your compiled binary) and a subsequent `RUN` sees it through the overlay; or keep scratch stages to `ADD` + metadata, the static-appliance shape they're made for.
 
-## `ADD <url>` fails with "fetched payload is a … archive"
+## `ADD <url>` fails with "fetched payload is a … filesystem image"
 
 ```
-error: ADD <url>: fetched payload is a zstd archive, which is not extracted yet —
-       pre-extract it, or repackage as tar/tar.gz
+error: ADD <url>: fetched payload is a squashfs filesystem image, which is not
+       extracted — repackage the contents as tar (optionally compressed) or zip
 ```
 
-The payload is sniffed by magic number, never by extension. tar and tar.gz extract natively; xz / bzip2 / zstd / zip do not yet — repackage as tar/tar.gz or pre-extract into the build context. A payload with no recognised archive magic is placed as a plain file at the destination, so a *misnamed* `.tar.gz` that is actually HTML lands as a file rather than failing — check what the URL actually serves. See [Known limitations](known-limitations.md#add-url-archive-coverage).
+The payload is sniffed by magic number, never by extension. Every archive family the sniffer recognises — tar (plain or gzip/zstd/xz/bzip2-compressed) and zip — extracts natively; a **squashfs** payload is the one recognised format that does not, because it is a filesystem image, not an archive. Unpack it (`unsquashfs`) and repackage the tree as a tar or zip. A payload with no recognised archive magic is placed as a plain file at the destination, so a *misnamed* `.tar.gz` that is actually HTML lands as a file rather than failing — check what the URL actually serves. See [Known limitations](known-limitations.md#add-url-archive-coverage).
 
-## `ADD <url>` fails with "could not be extracted as a tar archive"
+## `ADD <url>` fails with "could not be extracted"
 
 ```
-error: ADD <url>: the fetched gzip payload could not be extracted as a tar
-       archive: ... . Use a plain-file source, or repackage the content as
-       tar / tar.gz.
+error: ADD <url>: the fetched gzip payload could not be extracted: ... .
+       A compressed payload must wrap a tar archive; use a plain-file source,
+       or repackage the content as tar (optionally gzip/zstd/xz/bzip2-compressed)
+       or zip.
 ```
 
-The payload sniffed as **gzip** or **tar** by magic number, so UMF extracted it as a (optionally gzipped) tar, but it was not one. A lone `.gz` of a single file, or a corrupt or truncated archive, lands here. Decompress the file and `ADD` it uncompressed (it then lands as a plain file), or repackage the content as a real tar / tar.gz. See [Known limitations](known-limitations.md#add-url-archive-coverage).
+The payload's magic number marked it as extractable — a compression codec (gzip / zstd / xz / bzip2), a tar, or a zip — but extraction failed. The usual causes: a lone compressed *file* rather than a compressed tar (a `.gz` of a single binary sniffs as gzip, and a compressed payload must always wrap a tar), or a corrupt / truncated archive. Decompress the file and `ADD` it uncompressed (it then lands as a plain file), or repackage the content as a real tar / zip. See [Known limitations](known-limitations.md#add-url-archive-coverage).
 
 ## Registry push/pull is anonymous although my credential helper has the login
 

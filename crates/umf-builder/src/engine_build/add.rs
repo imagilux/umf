@@ -263,11 +263,12 @@ fn apply_add_from_stage(
 /// fingerprinting contract — extensions are never trusted), and either
 /// extract it or place it as a file:
 ///
-/// - **tar / tar.gz** — extracted so the *contents* land at `dst` (always
-///   a directory), via [`BuildStaging`]'s traversal-contained unpack.
-/// - **xz / bzip2 / zstd / squashfs** — a clear "not extracted yet" error
-///   rather than a silent file placement of something the recipe author
-///   expected to be unpacked.
+/// - **tar (plain or gzip/zstd/xz/bzip2-compressed) / zip** — extracted so
+///   the *contents* land at `dst` (always a directory), via
+///   [`BuildStaging`]'s traversal-contained, decompression-capped unpack.
+/// - **squashfs** — a clear "not extracted" error rather than a silent
+///   file placement of something the recipe author expected unpacked: it
+///   is a filesystem image, not an archive.
 /// - **anything else** — a plain file at `dst`, with docker's
 ///   trailing-slash rule (the URL's leaf name lands inside a `dst/`).
 ///
@@ -337,26 +338,31 @@ fn apply_add_url(
 
     use umf_oci::format::Format;
     match format {
-        Format::Tar | Format::Gzip => {
+        Format::Tar | Format::Gzip | Format::Zstd | Format::Xz | Format::Bzip2 | Format::Zip => {
             // Extract through the staging machinery, streaming straight from
-            // the staged file: it decodes gzip or plain tar and contains
-            // path traversal, the same guarantees the bootable userland
-            // unpack already relies on. A gzip/tar source that is not
-            // actually a (optionally gzipped) tar — a lone `.gz`, a corrupt
-            // archive — surfaces as a clear extract error.
+            // the staged file: it decodes the compression codec (or reads
+            // the zip's central directory — a seekable container, hence the
+            // path-based entry point) and contains path traversal, the same
+            // guarantees the bootable userland unpack already relies on. A
+            // compressed source that does not actually wrap a tar — a lone
+            // `.gz` of a single file, a corrupt archive — surfaces as a
+            // clear extract error.
             let mut staging = umf_oci::staging::BuildStaging::new()?;
-            staging.unpack_tarball(fetched.file.path()).map_err(|e| {
-                EngineBuildError::AddUrlExtractFailed {
-                    url: url.to_string(),
-                    format: format.as_str().to_string(),
-                    detail: e.to_string(),
-                }
+            let unpacked = if format == Format::Zip {
+                staging.unpack_zip(fetched.file.path())
+            } else {
+                staging.unpack_tarball(fetched.file.path())
+            };
+            unpacked.map_err(|e| EngineBuildError::AddUrlExtractFailed {
+                url: url.to_string(),
+                format: format.as_str().to_string(),
+                detail: e.to_string(),
             })?;
             let dst_dir = path_within_upper(&upper_root, dst);
             std::fs::create_dir_all(&dst_dir)?;
             crate::fsutil::copy_dir_recursive(staging.path(), &dst_dir)?;
         }
-        Format::Zstd | Format::Xz | Format::Bzip2 | Format::Squashfs => {
+        Format::Squashfs => {
             return Err(EngineBuildError::AddUrlArchiveUnsupported {
                 url: url.to_string(),
                 format: format.as_str().to_string(),

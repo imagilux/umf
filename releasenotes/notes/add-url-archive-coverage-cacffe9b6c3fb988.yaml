@@ -1,0 +1,14 @@
+---
+features:
+  - |
+    ``ADD <url>`` now extracts every archive family the specification
+    recognises: tar — plain or gzip/zstd/xz/bzip2-compressed — and zip,
+    closing the spec-vs-implementation gap that previously limited
+    extraction to tar and tar.gz. Zip extraction preserves unix permission
+    bits, recreates symlink entries safely (links land only after every
+    regular file, and both entry names and link placement are contained to
+    the extraction root), and shares the tar path's decompressed-size
+    ceiling so a zip bomb cannot fill the disk. A squashfs payload is now
+    rejected with a message naming it a filesystem image rather than a
+    "not extracted yet" archive; anything unrecognised is still placed as
+    a plain file.
