@@ -107,7 +107,7 @@ UMF is UEFI-only and needs an OVMF/EDK II firmware blob to boot a compiled disk.
 
 - Install the firmware: `sudo apt-get install -y ovmf` (Debian/Ubuntu) or `sudo dnf install -y edk2-ovmf` (Fedora).
 - Or point at it explicitly: `umf run --firmware /path/to/OVMF.fd <ref>`.
-- This auto-discovery (and so this error) applies to **both** backends for a bootable image, `--vmm=ch` included. The one place firmware is never discovered is a raw `--disk` boot: there `--vmm=ch` **requires** `--firmware PATH` (it cannot boot a raw disk without a firmware payload), while `qemu` falls back to its built-in firmware.
+- This auto-discovery (and so this error) applies to **both** backends, for a bootable image and for a raw `--disk` boot alike — with one asymmetry. Under `--vmm=ch` discovery probes a dedicated CloudHv edk2 build first (`CLOUDHV.fd` / `CLOUDHV_EFI.fd`, e.g. under `/usr/share/cloud-hypervisor/`) before the OVMF/AAVMF list, because Cloud Hypervisor cannot boot a disk without a firmware payload and runs best on its own edk2 platform build. `qemu` is the forgiving one: on a raw `--disk` boot with no `--firmware` and no discovered blob it falls back to its built-in firmware (SeaBIOS — which boots a legacy BIOS/MBR disk but not a UMF-compiled UEFI disk).
 
 ## A `RUN` in a `FROM scratch` build fails with "no such file or directory"
 

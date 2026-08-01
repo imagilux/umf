@@ -1,0 +1,14 @@
+---
+features:
+  - |
+    ``umf run --vmm=ch --disk`` no longer requires an explicit ``--firmware``
+    path: Cloud Hypervisor disk boots now auto-discover host UEFI firmware,
+    and discovery is backend-aware — a dedicated CloudHv edk2 build
+    (``CLOUDHV.fd`` on x86_64, ``CLOUDHV_EFI.fd`` on aarch64, probed at
+    ``/usr/share/cloud-hypervisor/`` and the ``edk2`` package trees) wins
+    over the generic OVMF/AAVMF list, for the bootable-image path as well.
+    QEMU raw-disk semantics are unchanged (no ``--firmware`` still falls
+    back to QEMU's built-in default, which legacy BIOS/MBR disks rely on).
+    ``umf doctor`` gains a *CH UEFI firmware* row showing what ``--vmm=ch``
+    discovery would pick, and a failed discovery reports an install hint
+    naming the CloudHv build instead of a bare missing-flag error.

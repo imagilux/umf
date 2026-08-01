@@ -63,14 +63,14 @@ Real-kernel boot is validated end to end under **QEMU/KVM**: a CI boot-smoke tes
 
 ## VM runtime (`umf run`)
 
-### Cloud Hypervisor: firmware auto-discovery and DHCP-based port-forwarding
+### Cloud Hypervisor: mandatory firmware payload and DHCP-based port-forwarding
 
-The `--vmm=ch` (Cloud Hypervisor) backend now does direct-kernel boot and host port-forwarding, with two caveats versus the default QEMU backend:
+The `--vmm=ch` (Cloud Hypervisor) backend does direct-kernel boot, disk boot with firmware auto-discovery, and host port-forwarding, with two caveats versus the default QEMU backend:
 
-- **Firmware is mandatory for disk boot, with no auto-discovery.** Cloud Hypervisor cannot boot a raw disk without a payload, so `umf run --vmm=ch --disk` requires `--firmware PATH` (it does not auto-discover OVMF the way QEMU does). Direct-kernel boot needs no firmware.
+- **Firmware is mandatory for disk boot — discovered, but with no built-in fallback.** Cloud Hypervisor cannot boot a raw disk without a firmware payload. `umf run --vmm=ch --disk` discovers one on the host — a dedicated CloudHv edk2 build (`CLOUDHV.fd` / `CLOUDHV_EFI.fd`) first, then the same OVMF/AAVMF list the QEMU path probes — and `--firmware PATH` overrides. But where firmware-less QEMU falls back to its built-in SeaBIOS, CH has nothing to fall back to: when discovery finds no blob the run fails with an install hint. Note that stock QEMU-platform OVMF is a best-effort fallback under CH — its device model is built for the CloudHv edk2 firmware, so install that (`umf doctor` reports what CH discovery would pick). Direct-kernel boot needs no firmware.
 - **Port-forwarding is host-side and needs the guest to take a DHCP lease.** Unlike QEMU's user-mode `hostfwd`, `-p/--port-forward --vmm=ch` sets up a per-VM network namespace + tap + nft DNAT, with a detached `dnsmasq` leasing the guest its address (gateway via the host veth). The guest must run a DHCP client, or you run your own DHCP in that namespace; `umf doctor` reports whether `dnsmasq` is present, and `nft` + `ip` are required.
 
-Use `--vmm=qemu` (the default) for auto-discovered firmware, or a guest image that does not configure its NIC.
+Use `--vmm=qemu` (the default) for the most forgiving firmware story, or a guest image that does not configure its NIC.
 
 ## Cross-architecture
 

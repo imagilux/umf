@@ -120,9 +120,9 @@ Bootable / VM:
 
 | Flag | Purpose |
 |------|---------|
-| `--vmm <qemu\|ch>` | Backend: `qemu` (default; universal, mature) or `ch` (Cloud Hypervisor: Rust-native, faster boot). For a raw `--disk` boot `ch` needs `--firmware` (see below); a bootable image discovers it automatically. |
+| `--vmm <qemu\|ch>` | Backend: `qemu` (default; universal, mature) or `ch` (Cloud Hypervisor: Rust-native, faster boot). Both discover firmware automatically — see `--firmware`. |
 | `--disk <PATH>` | Boot a raw disk directly (skips auto-compile). |
-| `--firmware <PATH>` | UEFI firmware (OVMF / EDK II). For a bootable image it is auto-discovered on the host for both backends, so pass it only to override or when discovery fails (*no UEFI firmware for `<arch>` found…*). For a raw `--disk` boot there is no discovery: `qemu` falls back to its built-in firmware, `ch` requires this flag. |
+| `--firmware <PATH>` | UEFI firmware (OVMF / EDK II). Auto-discovered on the host for both backends — under `--vmm=ch` a dedicated CloudHv edk2 build (`CLOUDHV.fd`) is probed first, then the OVMF/AAVMF list — so pass it only to override or when discovery fails (*no UEFI firmware for `<arch>` found…*). One asymmetry on a raw `--disk` boot: firmware-less `qemu` falls back to its built-in SeaBIOS (which boots a legacy BIOS/MBR disk), while `ch` cannot boot a disk without a firmware payload, so a failed discovery is an error there. |
 | `--memory <MIB>` / `--cpus <N>` | Guest RAM (default 1024) / vCPUs (default 2). |
 | `-p, --port-forward <HOST:GUEST[/udp]>` | Host port forward. Repeatable. QEMU uses user-mode networking (`hostfwd`); Cloud Hypervisor (`--vmm=ch`) has none, so UMF wires it host-side: a per-VM netns + tap + nft DNAT, pure-Rust (no `iproute2`), with a DHCP daemon in the namespace (`dnsmasq` by default; see `--dhcp-command`). Needs `nft` (and the DHCP daemon) on `PATH` (see `umf doctor`). |
 | `--dhcp-command <ARGV>` | DHCP daemon run inside the VM netns for `--vmm=ch` port-forwarding. Default `dnsmasq`; `none` launches nothing (run your own DHCP there, or use a static guest IP); any other value is a whitespace-split command, e.g. `--dhcp-command "kea-dhcp4 -c /etc/kea.conf"`. The daemon starts with the bridge up at `10.70.x.1/29` and owns its own config. |

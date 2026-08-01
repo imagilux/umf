@@ -19,7 +19,7 @@ fn resolve_prefers_single_file_bios() {
     touch(root, "usr/share/OVMF/OVMF.fd");
     touch(root, "usr/share/OVMF/OVMF_CODE.fd");
     touch(root, "usr/share/OVMF/OVMF_VARS.fd");
-    match resolve_uefi_firmware(root, VmArch::X86_64) {
+    match resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::Qemu) {
         Some(Firmware::Bios(p)) => assert_eq!(p, root.join("usr/share/OVMF/OVMF.fd")),
         other => panic!("expected single-file Bios, got {other:?}"),
     }
@@ -33,7 +33,7 @@ fn resolve_finds_split_code_vars_when_no_single_file() {
     let root = dir.path();
     touch(root, "usr/share/OVMF/OVMF_CODE.fd");
     touch(root, "usr/share/OVMF/OVMF_VARS.fd");
-    match resolve_uefi_firmware(root, VmArch::X86_64) {
+    match resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::Qemu) {
         Some(Firmware::Pflash { code, vars }) => {
             assert_eq!(code, root.join("usr/share/OVMF/OVMF_CODE.fd"));
             assert_eq!(vars, root.join("usr/share/OVMF/OVMF_VARS.fd"));
@@ -49,7 +49,7 @@ fn resolve_matches_arch_4m_split_layout() {
     let root = dir.path();
     touch(root, "usr/share/edk2/x64/OVMF_CODE.4m.fd");
     touch(root, "usr/share/edk2/x64/OVMF_VARS.4m.fd");
-    match resolve_uefi_firmware(root, VmArch::X86_64) {
+    match resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::Qemu) {
         Some(Firmware::Pflash { code, vars }) => {
             assert_eq!(code, root.join("usr/share/edk2/x64/OVMF_CODE.4m.fd"));
             assert_eq!(vars, root.join("usr/share/edk2/x64/OVMF_VARS.4m.fd"));
@@ -66,7 +66,7 @@ fn resolve_skips_half_installed_split_pair() {
     let root = dir.path();
     touch(root, "usr/share/OVMF/OVMF_CODE.fd");
     assert!(
-        resolve_uefi_firmware(root, VmArch::X86_64).is_none(),
+        resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::Qemu).is_none(),
         "a lone CODE half must not resolve",
     );
 }
@@ -74,8 +74,8 @@ fn resolve_skips_half_installed_split_pair() {
 #[test]
 fn resolve_returns_none_on_empty_root() {
     let dir = tempfile::tempdir().expect("tempdir");
-    assert!(resolve_uefi_firmware(dir.path(), VmArch::X86_64).is_none());
-    assert!(resolve_uefi_firmware(dir.path(), VmArch::Aarch64).is_none());
+    assert!(resolve_uefi_firmware(dir.path(), VmArch::X86_64, VmmKind::Qemu).is_none());
+    assert!(resolve_uefi_firmware(dir.path(), VmArch::Aarch64, VmmKind::Qemu).is_none());
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn resolve_aarch64_finds_aavmf_pflash_pair() {
     let root = dir.path();
     touch(root, "usr/share/AAVMF/AAVMF_CODE.fd");
     touch(root, "usr/share/AAVMF/AAVMF_VARS.fd");
-    match resolve_uefi_firmware(root, VmArch::Aarch64) {
+    match resolve_uefi_firmware(root, VmArch::Aarch64, VmmKind::Qemu) {
         Some(Firmware::Pflash { code, vars }) => {
             assert_eq!(code, root.join("usr/share/AAVMF/AAVMF_CODE.fd"));
             assert_eq!(vars, root.join("usr/share/AAVMF/AAVMF_VARS.fd"));
@@ -105,7 +105,7 @@ fn resolve_aarch64_never_returns_bios() {
     touch(root, "usr/share/OVMF/OVMF_CODE.fd");
     touch(root, "usr/share/OVMF/OVMF_VARS.fd");
     assert!(
-        resolve_uefi_firmware(root, VmArch::Aarch64).is_none(),
+        resolve_uefi_firmware(root, VmArch::Aarch64, VmmKind::Qemu).is_none(),
         "x86 OVMF must not satisfy an aarch64 firmware lookup",
     );
 }
@@ -117,15 +117,93 @@ fn resolve_aarch64_skips_half_installed_aavmf() {
     let root = dir.path();
     touch(root, "usr/share/AAVMF/AAVMF_CODE.fd");
     assert!(
-        resolve_uefi_firmware(root, VmArch::Aarch64).is_none(),
+        resolve_uefi_firmware(root, VmArch::Aarch64, VmmKind::Qemu).is_none(),
         "a lone AAVMF CODE half must not resolve",
     );
 }
 
 #[test]
-fn firmware_hints_are_arch_specific() {
-    assert!(firmware_install_hint(VmArch::X86_64).contains("OVMF"));
-    assert!(firmware_install_hint(VmArch::Aarch64).contains("AAVMF"));
+fn resolve_ch_prefers_a_dedicated_cloudhv_blob() {
+    // With both a CLOUDHV build and QEMU OVMF present, `--vmm=ch` must pick
+    // the CloudHv edk2 build — it is the one made for CH's device model.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    touch(root, "usr/share/cloud-hypervisor/CLOUDHV.fd");
+    touch(root, "usr/share/OVMF/OVMF.fd");
+    match resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::CloudHypervisor) {
+        Some(Firmware::Bios(p)) => {
+            assert_eq!(p, root.join("usr/share/cloud-hypervisor/CLOUDHV.fd"));
+        }
+        other => panic!("expected the CLOUDHV blob, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_ch_falls_back_to_the_qemu_ovmf_list() {
+    // No CLOUDHV build around: CH discovery falls through to the same OVMF
+    // candidates the QEMU path uses (the backend takes a split pair's CODE
+    // half), preserving the bootable path's long-standing behavior.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    touch(root, "usr/share/OVMF/OVMF_CODE.fd");
+    touch(root, "usr/share/OVMF/OVMF_VARS.fd");
+    match resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::CloudHypervisor) {
+        Some(Firmware::Pflash { code, .. }) => {
+            assert_eq!(code, root.join("usr/share/OVMF/OVMF_CODE.fd"));
+        }
+        other => panic!("expected the OVMF split fallback, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_qemu_ignores_cloudhv_blobs() {
+    // A CLOUDHV build is not a QEMU-platform firmware; the default backend
+    // must not pick it up.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    touch(root, "usr/share/cloud-hypervisor/CLOUDHV.fd");
+    assert!(
+        resolve_uefi_firmware(root, VmArch::X86_64, VmmKind::Qemu).is_none(),
+        "CLOUDHV.fd must not satisfy a QEMU firmware lookup",
+    );
+}
+
+#[test]
+fn resolve_ch_aarch64_finds_cloudhv_efi() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    touch(root, "usr/share/cloud-hypervisor/CLOUDHV_EFI.fd");
+    match resolve_uefi_firmware(root, VmArch::Aarch64, VmmKind::CloudHypervisor) {
+        Some(Firmware::Bios(p)) => {
+            assert_eq!(p, root.join("usr/share/cloud-hypervisor/CLOUDHV_EFI.fd"));
+        }
+        other => panic!("expected the aarch64 CLOUDHV_EFI blob, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_vmm_backend_normalizes_and_rejects() {
+    assert_eq!(parse_vmm_backend("qemu").unwrap(), VmmKind::Qemu);
+    assert_eq!(parse_vmm_backend("ch").unwrap(), VmmKind::CloudHypervisor);
+    assert_eq!(
+        parse_vmm_backend("cloud-hypervisor").unwrap(),
+        VmmKind::CloudHypervisor
+    );
+    assert!(matches!(
+        parse_vmm_backend("firecracker"),
+        Err(CliRunError::UnknownVmmBackend(_))
+    ));
+}
+
+#[test]
+fn firmware_hints_are_arch_and_backend_specific() {
+    assert!(firmware_install_hint(VmArch::X86_64, VmmKind::Qemu).contains("OVMF"));
+    assert!(firmware_install_hint(VmArch::Aarch64, VmmKind::Qemu).contains("AAVMF"));
+    let ch_hint = firmware_install_hint(VmArch::X86_64, VmmKind::CloudHypervisor);
+    assert!(ch_hint.contains("CLOUDHV.fd") && ch_hint.contains("OVMF"));
+    assert!(
+        firmware_install_hint(VmArch::Aarch64, VmmKind::CloudHypervisor).contains("CLOUDHV_EFI.fd")
+    );
     assert_eq!(arch_label(VmArch::X86_64), "x86_64");
     assert_eq!(arch_label(VmArch::Aarch64), "aarch64");
 }

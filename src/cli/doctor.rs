@@ -409,6 +409,26 @@ fn vm_rows(detected: &DetectedRuntimes, net: &NetworkEgress) -> Vec<Row> {
         ),
     });
 
+    // What `--vmm ch` firmware discovery would pick (a dedicated CLOUDHV
+    // build first, then the OVMF list). Advisory, matching the
+    // cloud-hypervisor binary row above — the default backend doesn't need it.
+    rows.push(match crate::cli::run::host_ch_firmware() {
+        Some(p) => Row::new(
+            "CH UEFI firmware",
+            "CLOUDHV / OVMF for `umf run --vmm ch` disk boot",
+            p.display().to_string(),
+            "",
+            Status::Ok,
+        ),
+        None => Row::new(
+            "CH UEFI firmware",
+            "CLOUDHV / OVMF for `umf run --vmm ch` disk boot",
+            "<none at usual host paths>",
+            "",
+            Status::Warn,
+        ),
+    });
+
     // dnsmasq is the default in-VM DHCP for the cloud-hypervisor port-forward
     // path, so it belongs with the VM section (an operator can swap it via
     // `--dhcp-command`); absent is advisory.
