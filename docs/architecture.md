@@ -70,7 +70,7 @@ Each filesystem-modifying directive becomes one content-addressed layer; re-buil
 `umf-vmm` exposes one `VmRuntime` trait with two backends behind it:
 
 - **QEMU** — `qemu-system-<arch>`, controlled post-spawn over [QMP](https://qemu.readthedocs.io/en/latest/interop/qmp-intro.html) via the typed `qapi` crate (boot-ready detection, status queries, graceful shutdown).
-- **Cloud Hypervisor** — controlled over its OpenAPI REST socket via the generated `cloud-hypervisor-client`. Rust-native, faster boot; needs an explicit firmware path.
+- **Cloud Hypervisor** — controlled over its OpenAPI REST socket via the generated `cloud-hypervisor-client`. Rust-native, faster boot; disk boot always needs a firmware payload (the CLI discovers a CloudHv edk2 / OVMF blob, or takes `--firmware`).
 
 `umf run` boots a bootable image by auto-compiling it to a disk (via `umf-compile`) and handing that to a backend — or `--disk <img>` boots a raw disk directly; the same crate backs the builder's per-RUN micro-VMs for bootable-build RUN steps.
 

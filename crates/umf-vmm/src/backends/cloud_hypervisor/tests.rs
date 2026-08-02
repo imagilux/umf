@@ -33,8 +33,16 @@ fn build_vm_config_rejects_disk_without_firmware() {
     let spec = VmSpec::from_disk(PathBuf::from("/tmp/disk.img"));
     let err = build_vm_config(&spec).expect_err("missing firmware should reject");
     let msg = err.to_string();
-    assert!(msg.contains("requires --firmware"), "got: {msg}");
-    assert!(msg.contains("OVMF") || msg.contains("EDK II"), "got: {msg}");
+    assert!(
+        msg.contains("cannot boot a raw disk without a firmware payload"),
+        "got: {msg}"
+    );
+    // The message must point at both fills: CLI discovery and the explicit flag.
+    assert!(
+        msg.contains("CLOUDHV") || msg.contains("OVMF"),
+        "got: {msg}"
+    );
+    assert!(msg.contains("--firmware"), "got: {msg}");
 }
 
 #[test]

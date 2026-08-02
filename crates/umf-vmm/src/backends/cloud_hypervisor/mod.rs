@@ -117,7 +117,8 @@ fn vm_state_to_vm_status(state: VmState) -> VmStatus {
 /// - Cloud Hypervisor cannot boot a raw disk without a `payload`
 ///   (kernel or firmware). We require the caller to supply a firmware
 ///   path via `BootSource::Disk { firmware: Some(...) }` — the CLI
-///   surfaces this as `--firmware PATH`.
+///   fills it by host discovery (CLOUDHV first, then OVMF) or from an
+///   explicit `--firmware PATH`.
 /// - Direct-kernel boot needs no firmware: the kernel *is* the payload.
 ///   `BootSource::DirectKernel` maps straight to the `PayloadConfig`
 ///   `kernel` / `initramfs` / `cmdline` fields (the firmware-free fast path
@@ -127,8 +128,9 @@ fn build_vm_config(spec: &VmSpec) -> Result<VmConfig, VmError> {
         BootSource::Disk { firmware, .. } => {
             let firmware = firmware.as_ref().ok_or_else(|| {
                 VmError::backend(
-                    "cloud-hypervisor requires --firmware PATH (it cannot boot a raw disk \
-                     without a firmware payload — pass an OVMF / EDK II image)",
+                    "cloud-hypervisor cannot boot a raw disk without a firmware payload — \
+                     supply one in BootSource::Disk (the CLI discovers a CLOUDHV / OVMF \
+                     blob on the host, or takes an explicit --firmware PATH)",
                     None,
                 )
             })?;

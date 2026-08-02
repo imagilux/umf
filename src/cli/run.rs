@@ -122,12 +122,30 @@ pub(crate) fn run_run(args: RunArgs<'_>) -> Result<i32, CliRunError> {
     // Explicit raw-disk boot: `--vmm` + `--disk` shortcut. Skips OCI introspect
     // entirely — a raw disk path isn't OCI-cataloged.
     if let (Some(backend), Some(disk)) = (args.vmm, args.disk) {
-        // A `--firmware PATH` override is always a single-file blob (`-bios`).
-        let firmware = args.firmware.map(|p| Firmware::Bios(p.to_path_buf()));
+        let vmm = parse_vmm_backend(backend)?;
         // A raw `--disk` carries no OCI arch metadata; assume the host's
         // architecture. (A cross-arch raw-disk boot via TCG is an advanced
         // case the OCI-introspected `run_bootable` path covers.)
-        return run_vm(backend, disk.to_path_buf(), firmware, VmArch::host(), &args);
+        let arch = VmArch::host();
+        let firmware =
+            match args.firmware {
+                // A `--firmware PATH` override is always a single-file blob (`-bios`).
+                Some(p) => Some(Firmware::Bios(p.to_path_buf())),
+                // QEMU boots a firmware-less raw disk with its built-in default
+                // (SeaBIOS) — a legacy BIOS/MBR disk relies on exactly that, so
+                // absence stays "let QEMU pick" rather than forcing UEFI.
+                None if vmm == VmmKind::Qemu => None,
+                // Cloud Hypervisor cannot boot a disk without a firmware payload:
+                // discover one on the host (a dedicated CLOUDHV build first, then
+                // the OVMF list) instead of demanding the flag.
+                None => Some(find_uefi_firmware(arch, vmm).ok_or_else(|| {
+                    CliRunError::NoUefiFirmware {
+                        arch: arch_label(arch),
+                        hint: firmware_install_hint(arch, vmm),
+                    }
+                })?),
+            };
+        return run_vm(vmm, disk.to_path_buf(), firmware, arch, &args);
     }
 
     let layout_dir = match args.layout_dir_override {
@@ -219,7 +237,7 @@ pub(crate) fn run_run(args: RunArgs<'_>) -> Result<i32, CliRunError> {
 /// keeps the dispatch site free of backend-specific code beyond
 /// the constructor selection.
 fn run_vm(
-    backend: &str,
+    backend: VmmKind,
     disk: PathBuf,
     firmware: Option<Firmware>,
     arch: VmArch,
@@ -261,7 +279,7 @@ fn run_vm(
     // it. The QEMU backend keeps using `port_forwards` (hostfwd) directly. The
     // guard lives to the end of this function — it tears the netns/tap down
     // after the VM exits.
-    let _vmnet = if matches!(backend, "ch" | "cloud-hypervisor") && !spec.port_forwards.is_empty() {
+    let _vmnet = if backend == VmmKind::CloudHypervisor && !spec.port_forwards.is_empty() {
         let mapped: Vec<umf_networking::PortForward> = spec
             .port_forwards
             .iter()
@@ -297,20 +315,19 @@ fn run_vm(
     let guard = super::process::RunningGuard::start(
         super::process::ProcessKind::Vm,
         disk_name,
-        format!("run --vmm {backend}"),
+        format!("run --vmm {}", backend.label()),
         Some(disk.display().to_string()),
         None,
     );
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async move {
         let runner: Box<dyn VmRuntime> = match backend {
-            "qemu" => Box::new(QemuRuntime::default()),
-            "ch" | "cloud-hypervisor" => Box::new(CloudHypervisorRuntime::default()),
-            other => return Err(CliRunError::UnknownVmmBackend(other.to_string())),
+            VmmKind::Qemu => Box::new(QemuRuntime::default()),
+            VmmKind::CloudHypervisor => Box::new(CloudHypervisorRuntime::default()),
         };
         let mut vm = runner.create(&spec).await?;
         runner.boot(&mut vm).await?;
-        info!(backend = %backend, "VM running — Ctrl-C to shut down");
+        info!(backend = %backend.label(), "VM running — Ctrl-C to shut down");
         // We don't install a signal handler in this PR; rely on the
         // child receiving SIGINT via the foreground process group when
         // the user Ctrl-Cs us. Signal-driven graceful shutdown via
@@ -364,19 +381,50 @@ fn run_bootable(
     let arch = VmArch::host();
 
     // UEFI firmware: the `--firmware` override (always a single-file blob),
-    // else firmware discovered on the host for this arch — x86 OVMF
+    // else firmware discovered on the host for this arch and backend — a
+    // dedicated CLOUDHV build first under `--vmm=ch`, then x86 OVMF
     // (single-file or split CODE/VARS) or aarch64 AAVMF (always a CODE/VARS
     // pflash pair). QEMU defaults to SeaBIOS / no firmware, which can't boot
     // a UEFI/GPT disk.
+    let backend = parse_vmm_backend(args.vmm.unwrap_or("qemu"))?;
     let firmware = match args.firmware {
         Some(p) => Firmware::Bios(p.to_path_buf()),
-        None => find_uefi_firmware(arch).ok_or_else(|| CliRunError::NoUefiFirmware {
+        None => find_uefi_firmware(arch, backend).ok_or_else(|| CliRunError::NoUefiFirmware {
             arch: arch_label(arch),
-            hint: firmware_install_hint(arch),
+            hint: firmware_install_hint(arch, backend),
         })?,
     };
-    let backend = args.vmm.unwrap_or("qemu");
     run_vm(backend, block, Some(firmware), arch, args)
+}
+
+/// The `--vmm` backend, parsed once at dispatch. Firmware discovery is
+/// backend-aware (Cloud Hypervisor's device model runs the dedicated edk2
+/// `CloudHv` firmware builds, not only QEMU-platform OVMF), so the string
+/// form is normalized before any resolution happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VmmKind {
+    Qemu,
+    CloudHypervisor,
+}
+
+impl VmmKind {
+    /// Canonical CLI label (`qemu` / `ch`), for logs and the process registry.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Qemu => "qemu",
+            Self::CloudHypervisor => "ch",
+        }
+    }
+}
+
+/// Normalize a `--vmm` value; an unrecognized backend is the same typed error
+/// it has always been, surfaced before any firmware lookup can run.
+fn parse_vmm_backend(backend: &str) -> Result<VmmKind, CliRunError> {
+    match backend {
+        "qemu" => Ok(VmmKind::Qemu),
+        "ch" | "cloud-hypervisor" => Ok(VmmKind::CloudHypervisor),
+        other => Err(CliRunError::UnknownVmmBackend(other.to_string())),
+    }
 }
 
 /// Single-file OVMF/EDK II blobs usable with QEMU's `-bios` (x86_64 only —
@@ -458,13 +506,40 @@ const AAVMF_SPLIT_CANDIDATES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Discover host UEFI firmware for QEMU, for `arch`. On x86_64 this prefers a
-/// single-file `OVMF.fd` (`-bios`), then a split CODE/VARS pflash pair (the
-/// default on modern distros). On aarch64 only the split AAVMF pflash layout
-/// exists (there is no `-bios` form). Returns `None` when no usable layout is
-/// present.
-fn find_uefi_firmware(arch: VmArch) -> Option<Firmware> {
-    resolve_uefi_firmware(Path::new("/"), arch)
+/// Single-file CLOUDHV/EDK II blobs for Cloud Hypervisor (x86_64). CH's
+/// device model is not the QEMU platform, so edk2 builds it a dedicated
+/// `CloudHv` firmware — `CLOUDHV.fd`, with the variable store carried
+/// internally (always a single blob, never a CODE/VARS pair). Shipped by
+/// some `edk2-ovmf` packagings (Arch's sized `.4m` layout included) or
+/// dropped by hand from the Cloud Hypervisor project's edk2 releases.
+const CLOUDHV_X86_CANDIDATES: &[&str] = &[
+    "usr/share/cloud-hypervisor/CLOUDHV.fd",
+    "usr/share/edk2/x64/CLOUDHV.4m.fd",
+    "usr/share/edk2/x64/CLOUDHV.fd",
+    "usr/share/edk2/cloudhv/CLOUDHV.fd",
+];
+
+/// aarch64 counterpart — the edk2 `ArmVirtCloudHv` platform's
+/// `CLOUDHV_EFI.fd` blob.
+const CLOUDHV_AARCH64_CANDIDATES: &[&str] = &[
+    "usr/share/cloud-hypervisor/CLOUDHV_EFI.fd",
+    "usr/share/edk2/aarch64/CLOUDHV_EFI.fd",
+];
+
+/// Discover host UEFI firmware for `arch` and the selected `vmm` backend.
+///
+/// QEMU: on x86_64 this prefers a single-file `OVMF.fd` (`-bios`), then a
+/// split CODE/VARS pflash pair (the default on modern distros); on aarch64
+/// only the split AAVMF pflash layout exists (there is no `-bios` form).
+///
+/// Cloud Hypervisor: a dedicated `CLOUDHV` blob wins outright (it is the
+/// build made for CH's device model), then the QEMU lists as a fallback —
+/// the CH backend takes the CODE half of a split pair, matching what the
+/// bootable path has always handed it.
+///
+/// Returns `None` when no usable layout is present.
+fn find_uefi_firmware(arch: VmArch, vmm: VmmKind) -> Option<Firmware> {
+    resolve_uefi_firmware(Path::new("/"), arch, vmm)
 }
 
 /// A representative host UEFI firmware path for the host architecture, or
@@ -472,16 +547,43 @@ fn find_uefi_firmware(arch: VmArch) -> Option<Firmware> {
 /// readiness; reuses [`find_uefi_firmware`] so the candidate paths stay in one
 /// place. Returns the single-file blob, or the CODE half of a split pflash pair.
 pub(crate) fn host_uefi_firmware() -> Option<std::path::PathBuf> {
-    find_uefi_firmware(VmArch::host()).map(|fw| match fw {
-        Firmware::Bios(path) => path,
-        Firmware::Pflash { code, .. } => code,
-    })
+    find_uefi_firmware(VmArch::host(), VmmKind::Qemu).map(firmware_representative)
 }
 
-/// Resolve UEFI firmware under `root` (`/` in production) for `arch`. The
-/// split-layout candidates only match when *both* the CODE and VARS halves
-/// exist, so a half-installed package never yields an unbootable pflash pair.
-fn resolve_uefi_firmware(root: &Path, arch: VmArch) -> Option<Firmware> {
+/// What `--vmm=ch` firmware discovery would pick on this host, for `umf
+/// doctor`'s Cloud Hypervisor readiness row. Same single-place candidate
+/// list as the run path.
+pub(crate) fn host_ch_firmware() -> Option<std::path::PathBuf> {
+    find_uefi_firmware(VmArch::host(), VmmKind::CloudHypervisor).map(firmware_representative)
+}
+
+/// The single path that best names a discovered firmware: the blob itself,
+/// or the CODE half of a split pflash pair.
+fn firmware_representative(fw: Firmware) -> std::path::PathBuf {
+    match fw {
+        Firmware::Bios(path) => path,
+        Firmware::Pflash { code, .. } => code,
+    }
+}
+
+/// Resolve UEFI firmware under `root` (`/` in production) for `arch` and
+/// `vmm`. The split-layout candidates only match when *both* the CODE and
+/// VARS halves exist, so a half-installed package never yields an unbootable
+/// pflash pair.
+fn resolve_uefi_firmware(root: &Path, arch: VmArch, vmm: VmmKind) -> Option<Firmware> {
+    if vmm == VmmKind::CloudHypervisor {
+        let candidates = match arch {
+            VmArch::X86_64 => CLOUDHV_X86_CANDIDATES,
+            VmArch::Aarch64 => CLOUDHV_AARCH64_CANDIDATES,
+        };
+        for rel in candidates {
+            let p = root.join(rel);
+            if p.is_file() {
+                return Some(Firmware::Bios(p));
+            }
+        }
+        // Fall through to the QEMU-platform lists below.
+    }
     match arch {
         VmArch::X86_64 => {
             for rel in OVMF_SINGLE_CANDIDATES {
@@ -516,14 +618,27 @@ fn arch_label(arch: VmArch) -> String {
     }
 }
 
-/// Arch-specific firmware-package install hint for the "no firmware found"
-/// diagnostic.
-fn firmware_install_hint(arch: VmArch) -> String {
-    match arch {
-        VmArch::X86_64 => "install OVMF (e.g. the `ovmf` package)".to_string(),
-        VmArch::Aarch64 => {
-            "install AAVMF (e.g. the `qemu-efi-aarch64` or `edk2-aarch64` package)".to_string()
-        }
+/// Arch- and backend-specific firmware-package install hint for the
+/// "no firmware found" diagnostic.
+fn firmware_install_hint(arch: VmArch, vmm: VmmKind) -> String {
+    let base = match arch {
+        VmArch::X86_64 => "install OVMF (e.g. the `ovmf` package)",
+        VmArch::Aarch64 => "install AAVMF (e.g. the `qemu-efi-aarch64` or `edk2-aarch64` package)",
+    };
+    match vmm {
+        VmmKind::Qemu => base.to_string(),
+        // CH boots best from its dedicated edk2 build; the generic package
+        // hint stays as the fallback the discovery order also takes.
+        VmmKind::CloudHypervisor => format!(
+            "install a CloudHv edk2 firmware (`CLOUDHV{}.fd` — shipped by some edk2 \
+             packagings, or from the Cloud Hypervisor project's edk2 releases, e.g. at \
+             /usr/share/cloud-hypervisor/), or {base}",
+            if matches!(arch, VmArch::Aarch64) {
+                "_EFI"
+            } else {
+                ""
+            },
+        ),
     }
 }
 
