@@ -1,0 +1,12 @@
+---
+security:
+  - |
+    Bumped the transitive ``h2`` dependency from 0.4.14 to 0.4.19, clearing
+    `RUSTSEC-2026-0258 <https://rustsec.org/advisories/RUSTSEC-2026-0258>`_.
+    The advisory covers an ``h2`` flaw that accepted and queued empty DATA
+    frames without limit, allowing unbounded memory growth (or a panic on
+    length overflow) against a peer that does not drain streams. UMF reaches
+    ``h2`` transitively through ``hyper`` — via ``axum``, ``reqwest`` /
+    ``oci-client``, ``hyper-rustls`` and ``cloud-hypervisor-client`` — so the
+    exposure is limited to the HTTP/2 clients and the in-process test
+    registry rather than any UMF-authored code path. Lockfile-only change.
