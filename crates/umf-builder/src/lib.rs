@@ -24,6 +24,7 @@ pub mod initrd;
 pub mod introspect;
 pub mod kernel;
 pub mod metrics;
+mod platform;
 pub mod resolver;
 pub mod runtime_config;
 pub mod runtime_writer;

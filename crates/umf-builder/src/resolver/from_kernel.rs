@@ -156,6 +156,21 @@ impl LayerResolve for FromKernelResolver {
 
     fn post_pull_check(layout: &ImageLayout, ref_name: &str) -> Result<(), Self::Error> {
         let profile = introspect(layout, ref_name)?;
+        if profile.kind == L0Kind::Bootable {
+            // Extending a bootable image is valid per the spec (`is_valid_from`
+            // accepts it), but the builder cannot do it yet: L2 would reinstall
+            // a kernel the base already carries, and the base's boot-manifest
+            // labels are not inherited. Say so plainly — silently building a
+            // container instead, which is what used to happen, produces an
+            // artifact `umf compile` then refuses for reasons that point
+            // nowhere near the cause.
+            return Err(FromKernelResolveError::MalformedArtifact {
+                ref_name: ref_name.into(),
+                detail: "extending a type=bootable image is not implemented yet; \
+                         build FROM the kernel artifact it was built from"
+                    .to_string(),
+            });
+        }
         if profile.kind != L0Kind::Payload(Payload::Kernel) {
             return Err(FromKernelResolveError::MalformedArtifact {
                 ref_name: ref_name.into(),

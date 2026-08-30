@@ -127,6 +127,24 @@ pub enum EngineBuildError {
     #[error("`build_single_stage` got a multi-stage AST — call `build` for multi-stage recipes")]
     MultiStageNotSupported,
 
+    /// A single-platform base image's architecture does not match the
+    /// requested `--platform`. The index path selects by platform, but a bare
+    /// manifest carries its architecture only in its config — without this
+    /// check the target arch would be stamped over it, publishing an image
+    /// whose config and layers disagree.
+    #[error(
+        "base image {reference} is {found}, but the build targets {want} — \
+        pick a base for {want}, use a multi-arch reference, or drop --platform"
+    )]
+    BaseImageArchMismatch {
+        /// The base reference as resolved.
+        reference: String,
+        /// The architecture the build targets.
+        want: String,
+        /// The architecture the base image declares.
+        found: String,
+    },
+
     /// Fetching an `ADD <url>` source failed (connection, HTTP status,
     /// or the payload exceeded its size ceiling).
     #[error("ADD {url}: fetch failed — {detail}")]

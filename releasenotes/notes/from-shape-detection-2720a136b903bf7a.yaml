@@ -1,0 +1,32 @@
+---
+fixes:
+  - |
+    A base image published as a **multi-arch index** no longer silently turns
+    a bootable build into a container build. Deciding a build's shape reads
+    the base's ``org.imagilux.umf.type``, and that read could not handle an
+    index — it errored, and the error was swallowed into "not a kernel". So a
+    kernel published the natural way, as an index, produced a container image
+    with a kernel in its layers. Shape detection now resolves the index to the
+    manifest matching the build's ``--platform`` first, and a base that
+    genuinely cannot be introspected is logged rather than silently
+    reinterpreted.
+  - |
+    A **single-platform base image of the wrong architecture** is now
+    rejected instead of being relabelled. The multi-arch path selects *by*
+    platform, but a bare manifest carries its architecture only in its config,
+    and the emitted config was stamped with the target architecture
+    regardless — so ``--platform=linux/arm64`` against an amd64 base succeeded
+    and published an image whose config claimed arm64 over amd64 layers. A
+    base whose config omits ``architecture`` is still accepted, since there is
+    nothing to contradict.
+upgrade:
+  - |
+    ``FROM`` a ``type=bootable`` image is now an explicit error — *extending a
+    type=bootable image is not implemented yet* — where it previously
+    produced a container image with a kernel in its layers that ``umf
+    compile`` later refused. The spec permits extending a bootable image; the
+    builder does not implement it yet (L2 would reinstall a kernel the base
+    already carries, and the base's boot-manifest labels are not inherited).
+    Derive from the kernel artifact the bootable image was built from instead.
+    See `Known limitations
+    <https://umf.imagilux.org/known-limitations/>`_.

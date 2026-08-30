@@ -186,3 +186,115 @@ fn index_selection_errors_when_arch_absent() {
         Ok(_) => panic!("expected an error for an unpublished arch, got Ok"),
     }
 }
+
+#[test]
+fn a_single_platform_base_of_the_wrong_arch_is_rejected() {
+    // The index path selects *by* platform, so it cannot pick the wrong arch.
+    // A bare manifest carries its architecture only in its config, and
+    // `image_config_from_raw` stamps the *target* arch over it — so without a
+    // check, `--platform=linux/arm64` against an amd64 base succeeded and
+    // published an image whose config claimed arm64 over amd64 layers.
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("init");
+    let child = stage_child(&layout, "amd64", 1, 0);
+
+    let ref_name = "example.invalid/amd-only:1";
+    layout.upsert_ref(ref_name, child).expect("register ref");
+
+    match resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::Aarch64,
+        umf_oci::image::LayerCompression::Gzip,
+    ) {
+        Err(EngineBuildError::BaseImageArchMismatch { want, found, .. }) => {
+            assert_eq!(want, "arm64");
+            assert_eq!(found, "amd64");
+        }
+        Err(other) => panic!("expected BaseImageArchMismatch, got {other:?}"),
+        Ok(_) => panic!("an amd64 base must not satisfy an arm64 build"),
+    }
+}
+
+#[test]
+fn a_single_platform_base_of_the_right_arch_is_accepted() {
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("init");
+    let child = stage_child(&layout, "arm64", 1, 0);
+
+    let ref_name = "example.invalid/arm-only:1";
+    layout.upsert_ref(ref_name, child).expect("register ref");
+
+    resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::Aarch64,
+        umf_oci::image::LayerCompression::Gzip,
+    )
+    .expect("a matching single-platform base resolves");
+}
+
+#[test]
+fn a_base_config_without_an_architecture_field_is_accepted() {
+    // Hand-rolled images exist and omitting `architecture` is not worth
+    // failing a build over — there is nothing to contradict.
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("init");
+
+    let config_doc = serde_json::json!({
+        "os": "linux",
+        "config": {},
+        "rootfs": { "type": "layers", "diff_ids": ["sha256:diff-0"] },
+    });
+    let config_bytes = serde_json::to_vec(&config_doc).expect("config");
+    let config_digest = layout.write_blob(&config_bytes).expect("write config");
+    let payload = b"layer-0\n".to_vec();
+    let layer_digest = layout.write_blob(&payload).expect("write layer");
+    let manifest = OciImageManifest {
+        schema_version: 2,
+        media_type: Some(OCI_IMAGE_MEDIA_TYPE.to_string()),
+        config: OciDescriptor {
+            media_type: IMAGE_CONFIG_MEDIA_TYPE.to_string(),
+            digest: config_digest,
+            size: config_bytes.len() as i64,
+            urls: None,
+            annotations: None,
+        },
+        layers: vec![OciDescriptor {
+            media_type: IMAGE_LAYER_MEDIA_TYPE.to_string(),
+            digest: layer_digest,
+            size: payload.len() as i64,
+            urls: None,
+            annotations: None,
+        }],
+        subject: None,
+        artifact_type: None,
+        annotations: None,
+    };
+    let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest");
+    let manifest_digest = sha256_digest(&manifest_bytes);
+    layout
+        .write_blob_with_digest(&manifest_bytes, &manifest_digest)
+        .expect("write manifest");
+    let ref_name = "example.invalid/no-arch:1";
+    layout
+        .upsert_ref(
+            ref_name,
+            ImageIndexEntry {
+                media_type: OCI_IMAGE_MEDIA_TYPE.to_string(),
+                digest: manifest_digest,
+                size: manifest_bytes.len() as i64,
+                platform: None,
+                annotations: None,
+            },
+        )
+        .expect("register ref");
+
+    resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::Aarch64,
+        umf_oci::image::LayerCompression::Gzip,
+    )
+    .expect("a config with no architecture field is not a mismatch");
+}

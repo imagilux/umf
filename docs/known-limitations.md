@@ -72,6 +72,16 @@ The `--vmm=ch` (Cloud Hypervisor) backend does direct-kernel boot, disk boot wit
 
 Use `--vmm=qemu` (the default) for the most forgiving firmware story, or a guest image that does not configure its NIC.
 
+### Extending a `type=bootable` image
+
+The [spec](specification.md#l0-introspection) says a bootable image is a valid `FROM` — "extend it like any base and the result stays bootable". The builder does not implement that yet and **rejects it explicitly**: *extending a type=bootable image is not implemented yet; build FROM the kernel artifact it was built from*.
+
+Making it work means more than accepting the base: L2 would otherwise reinstall a kernel the base already carries, and the base's boot-manifest labels (`flavor`, `entrypoint`, `kernel.*`) are not inherited. Until then, derive from the kernel artifact the bootable image was built from and repeat the userland directives.
+
+- **Spec vs. impl.** `L0Kind::is_valid_from` already accepts a bootable base; the build pipeline does not.
+
+Previously this failed *silently* — a bootable base produced a container image with a kernel in its layers, which `umf compile` then refused for reasons that pointed nowhere near the cause.
+
 ## Cross-architecture
 
 `--platform=<os>/<arch>` selects the architecture for **component resolution** (base images, kernels) and for the bootable preflight (`qemu-system-<arch>` detection). Cross-arch **container `RUN` execution** (via `binfmt_misc` + qemu-user-static, as the spec's [Cross-Architecture Builds](specification.md#cross-architecture-builds) describes) is a follow-up: a `--platform` that differs from the host arch resolves the right images but does not yet emulate foreign-arch `RUN` steps. Same-arch builds are unaffected.
