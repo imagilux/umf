@@ -1226,3 +1226,91 @@ fn hostile_input_yields_a_bounded_diagnostic_set() {
         MAX_COLLECTED_DIAGNOSTICS
     );
 }
+
+#[test]
+fn run_exec_form_parses_as_argv() {
+    // Documented in the spec and consumed in five places in the builder, but
+    // the parser never produced it: `[` and `]` lexed as ordinary punctuation
+    // and the whole line became a shell string, so the recipe ran
+    // `sh -c '["/usr/bin/foo", "--bar"]'` and failed at runtime.
+    let src = "FROM debian:bookworm\nRUN [\"/usr/bin/foo\", \"--bar\", \"baz qux\"]\n";
+    let ast = parse(src).expect("parse should succeed");
+    let run = match &ast.stages[0].directives[0] {
+        Directive::Run(r) => r,
+        other => panic!("expected RUN, got {other:?}"),
+    };
+    match &run.command {
+        umf_core::ast::RunCommand::Exec(argv) => {
+            let values: Vec<&str> = argv.iter().map(|a| a.value.as_str()).collect();
+            assert_eq!(values, ["/usr/bin/foo", "--bar", "baz qux"]);
+        }
+        umf_core::ast::RunCommand::Shell(s) => {
+            panic!(
+                "exec form must not degrade to a shell string: {:?}",
+                s.value
+            )
+        }
+    }
+}
+
+#[test]
+fn run_shell_form_containing_brackets_is_still_shell() {
+    // A bracket *inside* a command is not exec form — only a leading `[` is.
+    // Test globs and conditionals are the common shapes here.
+    let src = "FROM debian:bookworm\nRUN test -f /etc/os-release && echo ok[1]\n";
+    let ast = parse(src).expect("parse should succeed");
+    let run = match &ast.stages[0].directives[0] {
+        Directive::Run(r) => r,
+        other => panic!("expected RUN, got {other:?}"),
+    };
+    match &run.command {
+        umf_core::ast::RunCommand::Shell(s) => {
+            assert!(s.value.contains("echo ok[1]"), "got {:?}", s.value);
+        }
+        umf_core::ast::RunCommand::Exec(argv) => {
+            panic!("a mid-command bracket must not trigger exec form: {argv:?}")
+        }
+    }
+}
+
+#[test]
+fn run_exec_form_works_alongside_a_secret_mount() {
+    // `--mount` options are parsed before the command, so the exec-form
+    // branch has to sit after them rather than at the top of the directive.
+    let src = "FROM debian:bookworm\n\
+               RUN --mount=type=secret,id=tok,target=/run/tok [\"/bin/sign\", \"--key\", \"/run/tok\"]\n";
+    let ast = parse(src).expect("parse should succeed");
+    let run = match &ast.stages[0].directives[0] {
+        Directive::Run(r) => r,
+        other => panic!("expected RUN, got {other:?}"),
+    };
+    assert_eq!(run.mounts.len(), 1, "the secret mount is still parsed");
+    match &run.command {
+        umf_core::ast::RunCommand::Exec(argv) => {
+            assert_eq!(argv.first().map(|a| a.value.as_str()), Some("/bin/sign"));
+        }
+        umf_core::ast::RunCommand::Shell(s) => {
+            panic!("expected exec form after a mount, got {:?}", s.value)
+        }
+    }
+}
+
+#[test]
+fn run_exec_form_rejects_an_empty_argv() {
+    // `RUN []` is meaningless and must be a parse diagnostic, not a silent
+    // no-op or a shell string.
+    let src = "FROM debian:bookworm\nRUN []\n";
+    assert!(
+        parse(src).is_err(),
+        "an empty exec argv must be a parse error",
+    );
+}
+
+#[test]
+fn run_exec_form_rejects_an_unquoted_element() {
+    let src = "FROM debian:bookworm\nRUN [/usr/bin/foo]\n";
+    assert!(
+        parse(src).is_err(),
+        "exec-form elements must be quoted strings",
+    );
+}
