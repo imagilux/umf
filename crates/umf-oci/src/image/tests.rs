@@ -354,3 +354,153 @@ fn history_round_trips_through_emit_image() {
         Some("LABEL maintainer=Imagilux")
     );
 }
+
+/// Read every entry path out of a gzip-compressed layer blob.
+fn layer_entry_paths(layer: &super::LayerSource) -> Vec<String> {
+    let tar_bytes = {
+        let mut out = Vec::new();
+        let mut dec = flate2::read::GzDecoder::new(&layer.data[..]);
+        std::io::Read::read_to_end(&mut dec, &mut out).expect("gunzip layer");
+        out
+    };
+    let mut archive = tar::Archive::new(&tar_bytes[..]);
+    archive
+        .entries()
+        .expect("entries")
+        .map(|e| {
+            e.expect("entry")
+                .path()
+                .expect("path")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn overlay_deletion_becomes_a_wh_marker_entry() {
+    // overlayfs records a deletion as a 0/0 character device. Packing the
+    // upper-dir must translate it to the OCI `.wh.<name>` spelling, or the
+    // deletion is silently lost (a `RUN rm` that does nothing).
+    //
+    // Creating a character device needs CAP_MKNOD, so this asserts nothing
+    // when unprivileged. The opaque-directory sibling below covers the same
+    // translation path without privilege and always runs.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("kept.txt"), b"still here").expect("write");
+
+    let whiteout = root.join("deleted.txt");
+    let made = nix::sys::stat::mknod(
+        &whiteout,
+        nix::sys::stat::SFlag::S_IFCHR,
+        nix::sys::stat::Mode::from_bits_truncate(0o600),
+        0, // device 0/0 — the overlayfs deletion marker
+    );
+    if made.is_err() {
+        eprintln!("skipping: mknod needs CAP_MKNOD (unprivileged environment)");
+        return;
+    }
+
+    let layer = super::LayerSource::from_directory(root).expect("pack layer");
+    let paths = layer_entry_paths(&layer);
+
+    assert!(
+        paths.iter().any(|p| p == ".wh.deleted.txt"),
+        "deletion must be packed as `.wh.deleted.txt`, got {paths:?}",
+    );
+    assert!(
+        !paths.iter().any(|p| p == "deleted.txt"),
+        "the character device itself must not be packed, got {paths:?}",
+    );
+    assert!(
+        paths.iter().any(|p| p == "kept.txt"),
+        "ordinary files still pack, got {paths:?}",
+    );
+}
+
+#[test]
+fn opaque_directory_becomes_a_wh_opq_entry() {
+    // An overlay marks "discard the lower layers' view of this directory"
+    // with an xattr; OCI spells it as a `.wh..wh..opq` entry inside the dir.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let opaque = root.join("etc");
+    std::fs::create_dir(&opaque).expect("mkdir");
+    std::fs::write(opaque.join("fresh.conf"), b"new").expect("write");
+
+    if xattr::set(&opaque, "user.overlay.opaque", b"y").is_err() {
+        eprintln!("skipping: filesystem does not support user xattrs");
+        return;
+    }
+
+    let layer = super::LayerSource::from_directory(root).expect("pack layer");
+    let paths = layer_entry_paths(&layer);
+
+    assert!(
+        paths.iter().any(|p| p == "etc/.wh..wh..opq"),
+        "opaque dir must carry `.wh..wh..opq`, got {paths:?}",
+    );
+    assert!(
+        paths.iter().any(|p| p == "etc/fresh.conf"),
+        "the directory's own entries still pack, got {paths:?}",
+    );
+}
+
+#[test]
+fn a_layer_with_no_whiteouts_is_unchanged() {
+    // Regression guard: the whiteout translation must not perturb the
+    // ordinary path, since diff_ids are content-addressed and any spurious
+    // entry would invalidate every cached layer in the wild.
+    let dir = tempfile::tempdir().expect("tempdir");
+    tiny_dir(dir.path());
+    let layer = super::LayerSource::from_directory(dir.path()).expect("pack");
+    let paths = layer_entry_paths(&layer);
+    assert!(
+        !paths.iter().any(|p| p.contains(".wh.")),
+        "no whiteout entries may appear for an ordinary tree, got {paths:?}",
+    );
+}
+
+#[test]
+fn a_deletion_round_trips_from_upper_dir_to_materialized_rootfs() {
+    // The acceptance criterion for the whiteout work: a `RUN rm` (an
+    // overlayfs 0/0 character device in the upper dir) must actually remove
+    // the file when the resulting layers are applied. Before whiteout
+    // emission this silently kept the file.
+    let lower = tempfile::tempdir().expect("tempdir");
+    std::fs::write(lower.path().join("keep.txt"), b"keep").expect("write");
+    std::fs::write(lower.path().join("remove.txt"), b"doomed").expect("write");
+    let base_layer = super::LayerSource::from_directory(lower.path()).expect("pack base");
+
+    let upper = tempfile::tempdir().expect("tempdir");
+    let made = nix::sys::stat::mknod(
+        &upper.path().join("remove.txt"),
+        nix::sys::stat::SFlag::S_IFCHR,
+        nix::sys::stat::Mode::from_bits_truncate(0o600),
+        0,
+    );
+    if made.is_err() {
+        eprintln!("skipping: mknod needs CAP_MKNOD (unprivileged environment)");
+        return;
+    }
+    let delete_layer = super::LayerSource::from_directory(upper.path()).expect("pack delete");
+
+    let rootfs = tempfile::tempdir().expect("tempdir");
+    for layer in [&base_layer, &delete_layer] {
+        crate::materialize::apply_layer(&layer.data[..], rootfs.path()).expect("apply layer");
+    }
+
+    assert!(
+        rootfs.path().join("keep.txt").exists(),
+        "an untouched file survives",
+    );
+    assert!(
+        !rootfs.path().join("remove.txt").exists(),
+        "the whiteout must delete the lower-layer file",
+    );
+    assert!(
+        !rootfs.path().join(".wh.remove.txt").exists(),
+        "the marker itself must not land in the rootfs",
+    );
+}

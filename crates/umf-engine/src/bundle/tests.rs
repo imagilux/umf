@@ -16,8 +16,19 @@ fn supported_layer_media_types() {
     assert!(is_supported_layer_media_type(
         umf_oci::image::IMAGE_LAYER_ZSTD_MEDIA_TYPE
     ));
-    assert!(!is_supported_layer_media_type(
+    // Uncompressed OCI tar is spec-valid and `apply_layer` fingerprints the
+    // codec from the leading magic, so it unpacks correctly. This assertion
+    // was previously inverted, which made the engine reject a conformant
+    // layer despite the docs advertising read-side support for it.
+    assert!(is_supported_layer_media_type(
         "application/vnd.oci.image.layer.v1.tar"
+    ));
+    // Codecs UMF genuinely cannot decode still fail closed.
+    assert!(!is_supported_layer_media_type(
+        "application/vnd.oci.image.layer.v1.tar+xz"
+    ));
+    assert!(!is_supported_layer_media_type(
+        "application/vnd.oci.image.config.v1+json"
     ));
 }
 
@@ -474,7 +485,11 @@ fn unsupported_media_type_is_rejected() {
             "size": cfg_bytes.len(),
         },
         "layers": [{
-            "mediaType": "application/vnd.oci.image.layer.v1.tar",
+            // `+xz` is a codec UMF cannot decode, so it is rejected at the
+            // media-type gate. (Plain `…v1.tar` used to serve as this
+            // fixture's unsupported example, but it is spec-valid and now
+            // accepted.)
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+xz",
             "digest": layer_digest,
             "size": layer_bytes.len(),
         }],
@@ -493,10 +508,10 @@ fn unsupported_media_type_is_rejected() {
         .expect("upsert ref");
 
     let err = Bundle::from_image(&layout, "example.invalid/x:1", &BundleOptions::default())
-        .expect_err("uncompressed layer should be rejected");
+        .expect_err("an undecodable layer codec should be rejected");
     match err {
         EngineError::UnsupportedLayerMediaType(mt) => {
-            assert_eq!(mt, "application/vnd.oci.image.layer.v1.tar");
+            assert_eq!(mt, "application/vnd.oci.image.layer.v1.tar+xz");
         }
         other => panic!("expected UnsupportedLayerMediaType, got {other:?}"),
     }

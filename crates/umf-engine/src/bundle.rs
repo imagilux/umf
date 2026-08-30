@@ -543,17 +543,26 @@ impl Bundle {
 ///
 /// Decompression is delegated to [`umf_oci::materialize::apply_layer`], which
 /// fingerprints the codec from the blob's leading magic, so adding a media type
-/// here only requires that `apply_layer` can decode the matching bytes (gzip +
-/// zstd today). The erofs lower path additionally needs the encoder to accept
-/// the codec, but it shares this gate; erofs is an optional acceleration that
-/// falls back to the merged unpack, so an unsupported-for-erofs codec is
-/// handled by that fallback, not a hard gate change.
+/// here only requires that `apply_layer` can decode the matching bytes (gzip,
+/// zstd, and uncompressed tar today).
+///
+/// This gate is a **hard rejection**: [`unpack_layers_into`] errors with
+/// [`EngineError::UnsupportedLayerMediaType`] on anything not listed, so a
+/// spec-valid media type left out here makes a conformant image unusable.
+/// (The erofs lower path has its own, narrower predicate —
+/// [`is_erofs_encodable_media_type`] — and *that* one does fall back to the
+/// merged unpack rather than failing.)
 fn is_supported_layer_media_type(media_type: &str) -> bool {
     matches!(
         media_type,
         umf_oci::image::IMAGE_LAYER_ZSTD_MEDIA_TYPE
             | oci_client::manifest::IMAGE_LAYER_GZIP_MEDIA_TYPE
             | "application/vnd.docker.image.rootfs.diff.tar.gzip"
+            // Uncompressed OCI tar. Unusual in the wild but spec-valid, and
+            // `unpack_layer_into` fingerprints the codec from the leading
+            // magic rather than trusting this media type, so a plain tar
+            // already unpacks correctly once the gate lets it through.
+            | "application/vnd.oci.image.layer.v1.tar"
     )
 }
 

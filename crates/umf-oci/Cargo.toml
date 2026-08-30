@@ -42,10 +42,15 @@ tokio = { workspace = true, features = ["time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, optional = true }
+xattr = { workspace = true }
 zip = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+# `mknod` (safe wrapper, the workspace preference over a raw libc call) to
+# stage an overlayfs 0/0 character-device deletion marker in the layer-writer
+# whiteout tests.
+nix = { workspace = true, features = ["fs"] }
 # OCI image-spec JSON-schema conformance gate (OCI-1). The integration test
 # `tests/conformance_image_spec.rs` emits a manifest / config / index via the
 # emission API and validates each against the vendored draft-04 schemas under
