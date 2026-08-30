@@ -504,3 +504,142 @@ fn a_deletion_round_trips_from_upper_dir_to_materialized_rootfs() {
         "the marker itself must not land in the rootfs",
     );
 }
+
+/// A one-file tar, and the same bytes under each codec.
+fn tar_and_encodings() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use std::io::Write as _;
+    let mut tar = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut tar);
+        b.mode(tar::HeaderMode::Deterministic);
+        let content = b"normalised\n";
+        let mut h = tar::Header::new_gnu();
+        h.set_size(content.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "etc/marker", &content[..]).unwrap();
+        b.finish().unwrap();
+    }
+    let xz = {
+        let mut e = liblzma::write::XzEncoder::new(Vec::new(), 6);
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    let bz = {
+        let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    (tar, xz, bz)
+}
+
+#[test]
+fn normalizing_preserves_diff_id_and_rewrites_the_media_type() {
+    // The property that makes normalisation safe: `diff_id` is the digest of
+    // the *uncompressed* tar, so re-compressing changes the blob but not the
+    // layer's identity in `rootfs.diff_ids`. The image's content identity
+    // survives; only the stored bytes and the descriptor change.
+    let (tar, xz, bz) = tar_and_encodings();
+    let expected_diff_id = super::sha256_digest(&tar);
+
+    for (label, blob, mt) in [
+        ("xz", xz, "application/vnd.oci.image.layer.v1.tar+xz"),
+        ("bzip2", bz, "application/vnd.oci.image.layer.v1.tar+bzip2"),
+    ] {
+        let original = super::LayerSource {
+            data: bytes::Bytes::from(blob),
+            media_type: mt.to_string(),
+            diff_id: expected_diff_id.clone(),
+        };
+        let normalized = original
+            .normalized(super::LayerCompression::Gzip)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+
+        assert_eq!(
+            normalized.diff_id, expected_diff_id,
+            "{label}: diff_id must survive re-compression",
+        );
+        assert_eq!(
+            normalized.media_type,
+            super::LayerCompression::Gzip.media_type(),
+            "{label}: media type rewritten to the build's codec",
+        );
+        assert!(
+            super::is_oci_layer_media_type(&normalized.media_type),
+            "{label}: result must be a spec-defined layer type",
+        );
+        // And the bytes really are gzip now, not relabelled xz.
+        assert_eq!(
+            crate::format::detect(&normalized.data[..]),
+            crate::format::Format::Gzip,
+            "{label}: bytes must actually be re-encoded",
+        );
+    }
+}
+
+#[test]
+fn normalizing_leaves_spec_defined_codecs_untouched() {
+    // The common case must cost nothing: no decode, no re-encode, same blob.
+    let dir = tempfile::tempdir().expect("tempdir");
+    tiny_dir(dir.path());
+    for compression in [super::LayerCompression::Gzip, super::LayerCompression::Zstd] {
+        let layer = super::LayerSource::from_directory_with(dir.path(), compression).expect("pack");
+        let before = (
+            layer.data.clone(),
+            layer.media_type.clone(),
+            layer.diff_id.clone(),
+        );
+        let after = layer
+            .normalized(super::LayerCompression::Gzip)
+            .expect("normalize");
+        assert_eq!(
+            (after.data, after.media_type, after.diff_id),
+            before,
+            "a spec-defined codec must pass through byte-identical",
+        );
+    }
+}
+
+#[test]
+fn normalizing_honours_the_builds_chosen_codec() {
+    // Normalisation targets whatever the build emits, not a hardcoded gzip.
+    let (_tar, xz, _bz) = tar_and_encodings();
+    let layer = super::LayerSource {
+        data: bytes::Bytes::from(xz),
+        media_type: "application/vnd.oci.image.layer.v1.tar+xz".to_string(),
+        diff_id: "sha256:placeholder".to_string(),
+    };
+    let normalized = layer
+        .normalized(super::LayerCompression::Zstd)
+        .expect("normalize to zstd");
+    assert_eq!(
+        normalized.media_type,
+        super::LayerCompression::Zstd.media_type()
+    );
+    assert_eq!(
+        crate::format::detect(&normalized.data[..]),
+        crate::format::Format::Zstd,
+    );
+}
+
+#[test]
+fn normalizing_recomputes_a_wrong_diff_id() {
+    // A base image whose config disagreed with its blobs must not have that
+    // disagreement propagated into what we emit; the decoded bytes are
+    // authoritative.
+    let (tar, xz, _bz) = tar_and_encodings();
+    let layer = super::LayerSource {
+        data: bytes::Bytes::from(xz),
+        media_type: "application/vnd.oci.image.layer.v1.tar+xz".to_string(),
+        diff_id: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+    };
+    let normalized = layer
+        .normalized(super::LayerCompression::Gzip)
+        .expect("normalize");
+    assert_eq!(
+        normalized.diff_id,
+        super::sha256_digest(&tar),
+        "diff_id is recomputed from the decoded bytes, not trusted",
+    );
+}

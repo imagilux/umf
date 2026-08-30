@@ -171,6 +171,70 @@ impl LayerSource {
     }
 }
 
+/// The layer media types the OCI image-spec defines, plus Docker's gzip
+/// alias. A layer declaring anything else is readable (see
+/// [`crate::compression`]) but not something UMF should *emit*.
+///
+/// Deliberately not a general "can we read this" predicate — that question is
+/// answered by sniffing the bytes. This is the narrower "is this a media type
+/// the spec sanctions in a manifest we publish".
+#[must_use]
+pub fn is_oci_layer_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "application/vnd.oci.image.layer.v1.tar"
+            | "application/vnd.oci.image.layer.v1.tar+gzip"
+            | "application/vnd.oci.image.layer.v1.tar+zstd"
+            | "application/vnd.docker.image.rootfs.diff.tar.gzip"
+    )
+}
+
+impl LayerSource {
+    /// Re-encode this layer into `compression` if its media type is not one
+    /// the OCI image-spec defines; otherwise return it untouched.
+    ///
+    /// UMF accepts xz- and bzip2-compressed layers on the way in (a base
+    /// image built by another tool may carry them), but those are not
+    /// spec-defined layer media types, so carrying one forward verbatim would
+    /// put an out-of-spec descriptor in an image UMF claims is conformant.
+    /// Normalising on ingest keeps "everything `umf build` emits is a
+    /// spec-compliant OCI image" true without refusing the input.
+    ///
+    /// The `diff_id` is **invariant** under this operation: it is the digest
+    /// of the *uncompressed* tar, and re-compressing does not change the
+    /// uncompressed bytes. So the layer's identity in `rootfs.diff_ids` — and
+    /// therefore the image's content identity — survives; only the blob
+    /// digest and the media type change. The digest is recomputed from the
+    /// decoded bytes rather than trusted from the source, so a base image
+    /// whose config disagreed with its blobs yields a self-consistent result
+    /// instead of propagating the disagreement.
+    ///
+    /// # Errors
+    /// The payload cannot be decoded as a tar stream, or re-compression fails.
+    pub fn normalized(self, compression: LayerCompression) -> Result<Self, RegistryError> {
+        if is_oci_layer_media_type(&self.media_type) {
+            return Ok(self);
+        }
+        let (_format, mut decoded) = crate::compression::decode_tar_stream(&self.data[..])
+            .map_err(|e| {
+                RegistryError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("normalising layer {}: {e}", self.diff_id),
+                ))
+            })?;
+        let mut tar_bytes = Vec::new();
+        std::io::Read::read_to_end(&mut decoded, &mut tar_bytes).map_err(RegistryError::Io)?;
+
+        let diff_id = sha256_digest(&tar_bytes);
+        let data = compress(&tar_bytes, compression)?;
+        Ok(Self {
+            data: Bytes::from(data),
+            media_type: compression.media_type().to_string(),
+            diff_id,
+        })
+    }
+}
+
 /// Compress an uncompressed tar with `compression`, returning the blob bytes.
 fn compress(tar_bytes: &[u8], compression: LayerCompression) -> Result<Vec<u8>, RegistryError> {
     let mut buf = Vec::with_capacity(tar_bytes.len() / 2);

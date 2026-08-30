@@ -23,12 +23,22 @@ fn supported_layer_media_types() {
     assert!(is_supported_layer_media_type(
         "application/vnd.oci.image.layer.v1.tar"
     ));
-    // Codecs UMF genuinely cannot decode still fail closed.
-    assert!(!is_supported_layer_media_type(
+    // xz and bzip2 are readable — images from other tooling carry them, and
+    // the shared decoder handles them. They are not spec-defined *layer*
+    // types, so the builder normalises them into one before emitting; being
+    // liberal on the read side never makes UMF publish an out-of-spec type.
+    assert!(is_supported_layer_media_type(
         "application/vnd.oci.image.layer.v1.tar+xz"
     ));
+    assert!(is_supported_layer_media_type(
+        "application/vnd.oci.image.layer.v1.tar+bzip2"
+    ));
+    // Non-layer media types are still refused.
     assert!(!is_supported_layer_media_type(
         "application/vnd.oci.image.config.v1+json"
+    ));
+    assert!(!is_supported_layer_media_type(
+        "application/vnd.oci.image.layer.v1.tar+brotli"
     ));
 }
 
@@ -485,11 +495,10 @@ fn unsupported_media_type_is_rejected() {
             "size": cfg_bytes.len(),
         },
         "layers": [{
-            // `+xz` is a codec UMF cannot decode, so it is rejected at the
-            // media-type gate. (Plain `…v1.tar` used to serve as this
-            // fixture's unsupported example, but it is spec-valid and now
-            // accepted.)
-            "mediaType": "application/vnd.oci.image.layer.v1.tar+xz",
+            // A codec UMF has no decoder for, so it is rejected at the
+            // media-type gate. (Plain `…v1.tar` and `+xz` both served as this
+            // fixture's example previously; both are accepted now.)
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+brotli",
             "digest": layer_digest,
             "size": layer_bytes.len(),
         }],
@@ -511,7 +520,7 @@ fn unsupported_media_type_is_rejected() {
         .expect_err("an undecodable layer codec should be rejected");
     match err {
         EngineError::UnsupportedLayerMediaType(mt) => {
-            assert_eq!(mt, "application/vnd.oci.image.layer.v1.tar+xz");
+            assert_eq!(mt, "application/vnd.oci.image.layer.v1.tar+brotli");
         }
         other => panic!("expected UnsupportedLayerMediaType, got {other:?}"),
     }

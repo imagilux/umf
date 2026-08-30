@@ -120,13 +120,25 @@ fn index_selection_picks_requested_arch() {
     stage_multiarch_index(&layout, ref_name);
 
     // amd64 → the 1-layer child, config arch amd64.
-    let amd = resolve_base_image(&layout, ref_name, Architecture::X86_64).expect("resolve amd64");
+    let amd = resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::X86_64,
+        umf_oci::image::LayerCompression::Gzip,
+    )
+    .expect("resolve amd64");
     assert_eq!(amd.layers.len(), 1, "expected the amd64 (1-layer) manifest");
     assert_eq!(amd.config.architecture, "amd64");
 
     // arm64 → the 2-layer child, config arch arm64 (the target arch is
     // stamped on the emitted image even though the base agreed).
-    let arm = resolve_base_image(&layout, ref_name, Architecture::Aarch64).expect("resolve arm64");
+    let arm = resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::Aarch64,
+        umf_oci::image::LayerCompression::Gzip,
+    )
+    .expect("resolve arm64");
     assert_eq!(arm.layers.len(), 2, "expected the arm64 (2-layer) manifest");
     assert_eq!(arm.config.architecture, "arm64");
 }
@@ -163,7 +175,12 @@ fn index_selection_errors_when_arch_absent() {
     // Requesting arm64 must error, not silently fall back to amd64.
     // (`BaseImage` isn't `Debug`, so match the Result directly rather
     // than `expect_err`.)
-    match resolve_base_image(&layout, ref_name, Architecture::Aarch64) {
+    match resolve_base_image(
+        &layout,
+        ref_name,
+        Architecture::Aarch64,
+        umf_oci::image::LayerCompression::Gzip,
+    ) {
         Err(EngineBuildError::NoManifestForPlatform { arch }) => assert_eq!(arch, "arm64"),
         Err(other) => panic!("expected NoManifestForPlatform, got {other:?}"),
         Ok(_) => panic!("expected an error for an unpublished arch, got Ok"),

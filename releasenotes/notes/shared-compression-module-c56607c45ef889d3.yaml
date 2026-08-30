@@ -15,8 +15,15 @@ fixes:
     at the end of the file, or a squashfs filesystem image — now fails with a
     message naming the format instead of handing malformed bytes to the tar
     reader.
-    The container engine's layer **media-type** allowlist is unchanged and
-    still accepts only the three types the OCI image-spec defines
-    (``…v1.tar``, ``…v1.tar+gzip``, ``…v1.tar+zstd``, plus Docker's gzip
-    alias); ``…v1.tar+xz`` remains refused as an out-of-spec layer type,
-    which is a media-type decision rather than a decoding limitation.
+    xz- and bzip2-compressed layers are now **accepted and normalised**
+    rather than refused. Neither is a media type the OCI image-spec defines
+    for layers, but images built by other tooling carry them, so refusing
+    made a usable image unusable. UMF now reads them and re-encodes such a
+    layer into the build's own codec on the way in, so everything ``umf
+    build`` emits still carries only ``…v1.tar``, ``…v1.tar+gzip`` or
+    ``…v1.tar+zstd``. Because ``diff_id`` is the digest of the
+    *uncompressed* tar, re-compression leaves the layer's identity — and the
+    image's content identity — unchanged; only the blob digest and the
+    descriptor's media type move, and a layer already using a spec-defined
+    codec passes through untouched. A codec UMF has no decoder for is still
+    refused outright.

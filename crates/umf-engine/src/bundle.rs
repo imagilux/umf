@@ -563,6 +563,14 @@ fn is_supported_layer_media_type(media_type: &str) -> bool {
             // magic rather than trusting this media type, so a plain tar
             // already unpacks correctly once the gate lets it through.
             | "application/vnd.oci.image.layer.v1.tar"
+            // xz and bzip2 are *not* spec-defined layer media types, but
+            // images built by other tooling carry them and the shared decoder
+            // reads them. Accept rather than refuse a usable image; the
+            // builder normalises such a layer to a spec codec on the way into
+            // anything UMF emits (see `LayerSource::normalized`), so being
+            // liberal here never makes UMF *publish* an out-of-spec type.
+            | "application/vnd.oci.image.layer.v1.tar+xz"
+            | "application/vnd.oci.image.layer.v1.tar+bzip2"
     )
 }
 
