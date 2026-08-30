@@ -78,4 +78,12 @@ Use `--vmm=qemu` (the default) for the most forgiving firmware story, or a guest
 
 ## OCI layer encoding
 
-`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`. On the **read** side UMF transparently applies gzip-, zstd-, and uncompressed-tar layers, and the build-staging unpacker additionally decodes xz- and bzip2-compressed tars (for fetched `ADD <url>` payloads — a layer blob is never xz/bzip2). An `…tar+xz` **layer** is rejected: the codec is only wired for `ADD` payloads, not for layer blobs. gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).
+`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`.
+
+On the **read** side, codec selection is centralised: one decoder fingerprints the payload's leading magic and handles a plain tar or a gzip-, zstd-, xz-, or bzip2-compressed one. The same decoder serves both layer blobs and fetched `ADD <url>` payloads, so the two accept an identical set — they used to be separate lists that had drifted apart.
+
+On the **write** side UMF emits only the codecs the OCI image-spec defines. Those are two different standards on purpose, and the bridge between them is normalisation: a base image carrying an `…v1.tar+xz` or `…v1.tar+bzip2` layer (built by other tooling — neither is a spec-defined layer media type) is **accepted and re-encoded** into the build's own codec on the way in. `diff_id` is the digest of the *uncompressed* tar, so re-compression leaves the layer's identity — and the image's content identity — unchanged; only the blob digest and the descriptor's media type move. A layer already using a spec-defined codec passes through untouched, so the common case costs nothing.
+
+The result: UMF reads what the ecosystem produces, and everything `umf build` emits still carries only `…v1.tar`, `…v1.tar+gzip`, or `…v1.tar+zstd`. A codec UMF has no decoder for at all is still refused outright.
+
+gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).

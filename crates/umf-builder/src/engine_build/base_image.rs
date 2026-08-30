@@ -97,6 +97,7 @@ pub(crate) fn resolve_base_image(
     layout: &ImageLayout,
     ref_name: &str,
     architecture: Architecture,
+    compression: umf_oci::image::LayerCompression,
 ) -> Result<BaseImage, EngineBuildError> {
     use oci_client::manifest::OciManifest;
     use oci_spec::image::{Arch, Os};
@@ -158,11 +159,19 @@ pub(crate) fn resolve_base_image(
     let mut layers = Vec::with_capacity(manifest.layers.len());
     for (descriptor, diff_id) in manifest.layers.iter().zip(diff_ids.iter()) {
         let blob = layout.read_blob(&descriptor.digest)?;
-        layers.push(LayerSource {
-            data: Bytes::from(blob),
-            media_type: descriptor.media_type.clone(),
-            diff_id: diff_id.clone(),
-        });
+        // Normalise a non-spec codec (xz / bzip2) into the build's own, so
+        // the image we emit carries only layer media types the OCI
+        // image-spec defines. A spec-defined codec passes through untouched,
+        // so the common case costs nothing. `diff_id` is unchanged by
+        // re-compression, so the layer's identity survives.
+        layers.push(
+            LayerSource {
+                data: Bytes::from(blob),
+                media_type: descriptor.media_type.clone(),
+                diff_id: diff_id.clone(),
+            }
+            .normalized(compression)?,
+        );
     }
 
     Ok(BaseImage {

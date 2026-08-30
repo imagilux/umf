@@ -16,11 +16,9 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
-use flate2::read::GzDecoder;
 use thiserror::Error;
 use tracing::debug;
 
-use crate::format::{self, Format};
 use crate::registry::ImageLayout;
 use crate::registry::error::RegistryError;
 
@@ -102,29 +100,13 @@ pub fn materialize_layers<S: AsRef<str>>(
 /// callers that already hold the layer bytes (and for targeted tests);
 /// [`materialize_layers`] is the usual entry point.
 pub fn apply_layer<R: Read>(source: R, target: &Path) -> io::Result<()> {
-    // Peek the leading bytes (enough for the longest compression magic we route
-    // on — zstd's 4) and chain them back ahead of the rest, so the codec sniff
-    // never consumes data the decoder needs. Same trick as `staging`, kept local
-    // so this module stays self-contained.
-    let mut reader = io::BufReader::new(source);
-    let mut peek = [0u8; 4];
-    let n = read_full(&mut reader, &mut peek)?;
-    let combined = (&peek[..n]).chain(reader);
-    // Cap the *decompressed* byte count: the compressed blob is already capped
-    // on download (8 GiB), but gzip/zstd can expand a small blob to petabytes,
-    // so an uncapped decode would write until the disk fills.
-    let cap = max_uncompressed_layer_bytes();
-    match format::detect(&peek[..n]) {
-        Format::Gzip => apply_tar(CappedReader::new(GzDecoder::new(combined), cap), target),
-        Format::Zstd => apply_tar(
-            CappedReader::new(zstd::stream::read::Decoder::new(combined)?, cap),
-            target,
-        ),
-        // A 4-byte prefix can't reach the `ustar` magic at offset 257, so an
-        // uncompressed tar fingerprints as `Unknown` here — that's fine, it
-        // falls through to the plain-tar branch.
-        _ => apply_tar(CappedReader::new(combined, cap), target),
-    }
+    // Codec selection (and the decompression ceiling that guards it) lives in
+    // `crate::compression`, shared with the build-staging unpacker — so a
+    // layer and a fetched `ADD <url>` payload accept exactly the same set of
+    // codecs, compressed or not, rather than two lists that drift.
+    let (_format, decoded) = crate::compression::decode_tar_stream(source)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    apply_tar(decoded, target)
 }
 
 /// Default ceiling on a single layer's *decompressed* size. Generous enough for

@@ -324,3 +324,70 @@ fn contained_read_rejects_escape_allows_internal() {
     // Absent → None.
     assert!(contained_read(root.path(), &root.path().join("nope")).is_none());
 }
+
+#[test]
+fn a_layer_may_be_xz_or_bzip2_compressed() {
+    // Centralising codec selection means the layer path picked up the codecs
+    // that only the staging path used to understand. Before the shared
+    // decoder, an xz- or bzip2-compressed layer blob was fed to the tar
+    // reader raw and failed, even though the same bytes unpacked fine as a
+    // fetched `ADD <url>` payload.
+    use std::io::Write as _;
+
+    let tar = {
+        let mut out = Vec::new();
+        let mut b = tar::Builder::new(&mut out);
+        b.mode(tar::HeaderMode::Deterministic);
+        let content = b"from a compressed layer\n";
+        let mut h = tar::Header::new_gnu();
+        h.set_size(content.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "etc/marker", &content[..]).unwrap();
+        b.finish().unwrap();
+        drop(b);
+        out
+    };
+
+    let xz = {
+        let mut e = liblzma::write::XzEncoder::new(Vec::new(), 6);
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    let bz = {
+        let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+
+    for (label, blob) in [("xz", xz), ("bzip2", bz)] {
+        let target = tempfile::tempdir().expect("tempdir");
+        apply_layer(&blob[..], target.path())
+            .unwrap_or_else(|e| panic!("{label} layer should apply: {e}"));
+        assert_eq!(
+            std::fs::read(target.path().join("etc/marker")).expect("read"),
+            b"from a compressed layer\n",
+            "{label} layer content",
+        );
+    }
+}
+
+#[test]
+fn a_layer_that_is_a_zip_fails_with_a_clear_message() {
+    // A zip cannot be a layer (its index is at the end of the file, so it is
+    // not a stream). The shared decoder says so explicitly rather than
+    // handing garbage to the tar reader.
+    use std::io::Write as _;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    w.start_file("a.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(b"hi").unwrap();
+    let blob = w.finish().unwrap().into_inner();
+
+    let target = tempfile::tempdir().expect("tempdir");
+    let err = apply_layer(&blob[..], target.path()).expect_err("a zip is not a layer");
+    assert!(
+        err.to_string().contains("zip"),
+        "message should name the format, got: {err}",
+    );
+}

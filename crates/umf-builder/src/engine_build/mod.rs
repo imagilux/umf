@@ -789,7 +789,7 @@ async fn build_one_stage(
             )
         } else {
             (
-                resolve_base_image(layout, &canonical_from, ctx.architecture)?,
+                resolve_base_image(layout, &canonical_from, ctx.architecture, ctx.compression)?,
                 Bundle::from_image(layout, &canonical_from, &bundle_opts)?,
             )
         };
