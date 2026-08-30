@@ -24,11 +24,9 @@ use crate::format::{self, Format};
 use crate::registry::ImageLayout;
 use crate::registry::error::RegistryError;
 
-/// OCI whiteout prefix: `.wh.<name>` deletes `<name>` from the lower layers.
-const WH_PREFIX: &str = ".wh.";
-/// OCI opaque marker: `.wh..wh..opq` clears the containing directory's
-/// lower-layer contents before this layer's entries apply.
-const WH_OPAQUE: &str = ".wh..wh..opq";
+// The whiteout vocabulary lives in `crate::whiteout` so the reader here and
+// the layer writer in `crate::image` cannot drift apart.
+use crate::whiteout::{WH_OPAQUE, WH_PREFIX};
 
 /// Errors produced while materializing layers into a rootfs.
 #[derive(Debug, Error)]

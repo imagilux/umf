@@ -41,6 +41,7 @@ pub mod image;
 pub mod materialize;
 pub mod registry;
 pub mod staging;
+pub(crate) mod whiteout;
 
 #[cfg(feature = "test-server")]
 pub mod test_registry;

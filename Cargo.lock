@@ -4057,6 +4057,7 @@ dependencies = [
  "http",
  "jsonschema",
  "liblzma",
+ "nix 0.29.0",
  "oci-client",
  "oci-spec",
  "serde",
@@ -4070,6 +4071,7 @@ dependencies = [
  "tracing",
  "umf-core",
  "uuid",
+ "xattr",
  "zip",
  "zstd",
 ]

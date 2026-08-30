@@ -9,6 +9,7 @@ use std::fs::{File, read_dir};
 use std::path::{Path, PathBuf};
 
 use crate::registry::error::RegistryError;
+use crate::whiteout::{WH_OPAQUE, is_opaque_dir, is_overlay_deletion, whiteout_name};
 
 /// Tar a directory tree into reproducible (deterministic-header) bytes.
 pub(super) fn build_tar(root: &Path) -> Result<Vec<u8>, RegistryError> {
@@ -42,17 +43,55 @@ pub(super) fn build_tar(root: &Path) -> Result<Vec<u8>, RegistryError> {
                 builder.append_link(&mut header, relative, &target)?;
             } else if meta.is_dir() {
                 builder.append_dir(relative, path)?;
+                // An overlay marks a directory whose lower-layer contents must
+                // be discarded with an xattr; OCI spells the same thing as a
+                // `.wh..wh..opq` entry *inside* the directory. Emitted right
+                // after the directory itself so the ordering stays a pure
+                // function of the sorted walk.
+                if is_opaque_dir(path) {
+                    append_marker(&mut builder, &relative.join(WH_OPAQUE))?;
+                }
             } else if meta.is_file() {
                 let mut file = File::open(path)?;
                 builder.append_file(relative, &mut file)?;
+            } else if is_overlay_deletion(&meta) {
+                // overlayfs records "deleted relative to the lower layers" as a
+                // 0/0 character device. Translate it to the OCI encoding — a
+                // `.wh.<name>` marker file — because a character device is not
+                // one of the three kinds packed above and would otherwise be
+                // dropped on the floor, silently losing the deletion.
+                let Some(name) = relative.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let marker = relative.with_file_name(whiteout_name(name));
+                append_marker(&mut builder, &marker)?;
             }
-            // Sockets, fifos and other special files are skipped — we
+            // Sockets, fifos and non-whiteout device nodes are skipped — we
             // don't have a use case for them yet, and OCI tools tolerate
             // their absence in a layer tarball.
         }
         builder.finish()?;
     }
     Ok(tar_buf)
+}
+
+/// Append a zero-length marker file (a `.wh.` whiteout or a `.wh..wh..opq`
+/// opaque marker) at `relative`, with the same deterministic header the rest
+/// of the walk uses so the layer stays byte-reproducible.
+fn append_marker<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    relative: &Path,
+) -> Result<(), RegistryError> {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_size(0);
+    header.set_mtime(0);
+    header.set_cksum();
+    builder.append_data(&mut header, relative, std::io::empty())?;
+    Ok(())
 }
 
 /// Collect every path under `dir` into `out` in lexicographic order, without

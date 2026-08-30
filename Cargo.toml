@@ -158,6 +158,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
 tar = "0.4"
+# Extended-attribute reads for overlay opaque-directory markers (umf-oci's
+# whiteout translation). Already in the tree transitively via `tar`.
+xattr = "1"
 tempfile = "3"
 # VM target — GPT partition tables + FAT32 filesystem, pure-Rust so the
 # builder does not require host-side `sgdisk` / `mkfs.fat` utilities.

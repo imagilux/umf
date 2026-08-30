@@ -1,0 +1,24 @@
+---
+fixes:
+  - |
+    ``RUN`` file deletions are no longer silently lost. overlayfs records a
+    deleted path in the build's upper directory as a 0/0 character device,
+    and the layer writer packed only symlinks, directories and regular
+    files — so the marker was dropped and the file survived into the
+    emitted image. A ``RUN rm -rf`` that removed content coming from a lower
+    layer therefore did nothing, leaving images larger than the recipe
+    implied and, worse, leaving deliberately-removed content (build
+    artifacts, credentials scrubbed after use) in the published image.
+    The writer now translates overlay markers into the OCI encoding:
+    a 0/0 character device becomes a ``.wh.<name>`` entry, and a directory
+    carrying an overlay opaque xattr gains a ``.wh..wh..opq`` entry. The
+    read side already understood both, so deletions now round-trip.
+  - |
+    Uncompressed OCI tar layers (``application/vnd.oci.image.layer.v1.tar``)
+    are accepted by the container engine again. The media-type gate listed
+    only the gzip and zstd spellings, so a spec-valid uncompressed layer was
+    rejected outright with *unsupported layer media type* even though the
+    unpacker fingerprints the codec from the blob's magic and handles plain
+    tar correctly. This contradicted the documented read-side support and
+    the project's OCI-conformance goal. Codecs UMF genuinely cannot decode
+    (for example ``…tar+xz``) still fail closed.
