@@ -8,17 +8,12 @@
 //! skips to the next newline and continues with the next directive, so a
 //! single broken line yields one diagnostic rather than a cascade.
 //!
-//! Known limitations (planned follow-ups):
-//!
-//! - **RUN exec form** (`RUN ["a", "b"]`) is not yet handled — falls through
-//!   to shell-form parsing, which will error out because the bracket isn't a
-//!   valid command character.
-//! - **`RUN --mount=…`** options are accepted by the lexer but currently the
-//!   grammar drops them on the floor; the resulting [`Run`] has an empty
-//!   `mounts` field even if mounts were declared.
-//!
-//! These produce a working parser for the documented examples but need
-//! follow-up before secrets and exec-form `RUN` work end-to-end.
+//! `RUN` accepts both forms the spec documents: a shell string, sliced from
+//! the original source so whitespace, quoting and `\`-newline continuations
+//! survive for the shell to interpret; and the JSON-array exec form, which
+//! shares its array parser with `CMD` and `VOLUME`. Only a
+//! *leading* `[` selects exec form, so a bracket inside a command
+//! (`echo ok[1]`, a test glob) stays shell.
 
 use umf_core::ast::{
     Add, AddSource, Arg, Ast, Cmd, CmdForm, Directive, Entrypoint, EntrypointInit, Env, Expose,
@@ -615,6 +610,22 @@ impl<'a> Parser<'a> {
             return None;
         }
         let cmd_start = first_tok.span.start;
+
+        // Exec form: `RUN ["argv0", "argv1", ...]`, the same JSON-array shape
+        // CMD and ENTRYPOINT accept. Without this the brackets lexed as
+        // ordinary punctuation and the whole line became a shell string, so
+        // the recipe ran `sh -c '["argv0", ...]'` and failed at runtime with a
+        // shell syntax error rather than doing what it said.
+        if matches!(first_tok.kind, TokenKind::Punct(Punct::LBracket)) {
+            let (argv, end) = self.parse_string_array("RUN")?;
+            self.expect_newline_after("RUN");
+            return Some(Directive::Run(Run {
+                command: RunCommand::Exec(argv),
+                mounts,
+                span: Span::new(start, end),
+            }));
+        }
+
         let mut cmd_end = cmd_start;
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::Newline) {

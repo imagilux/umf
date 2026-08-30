@@ -1,0 +1,15 @@
+---
+fixes:
+  - |
+    ``RUN ["/usr/bin/foo", "--bar"]`` — the exec form — is now parsed as an
+    argv vector. The specification documents it and the builder has consumed
+    ``RunCommand::Exec`` in five places all along, but the parser never
+    produced one: ``[`` and ``]`` lexed as ordinary punctuation and the whole
+    line became a shell string. A recipe using the documented form therefore
+    ran ``sh -c '["/usr/bin/foo", "--bar"]'`` and failed at runtime with a
+    shell syntax error, having produced no parse diagnostic and a misleading
+    ``created_by`` line in the image history.
+    Only a *leading* ``[`` selects exec form, so a bracket inside a command
+    (a test glob, ``echo ok[1]``) is still shell. An empty argv (``RUN []``)
+    or an unquoted element is a parse diagnostic rather than a silent
+    downgrade, matching how ``CMD`` and ``ENTRYPOINT`` already behave.
