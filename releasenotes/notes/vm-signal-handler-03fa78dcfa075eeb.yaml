@@ -1,0 +1,17 @@
+---
+fixes:
+  - |
+    Interrupting ``umf run`` on a VM with Ctrl-C no longer leaks host
+    networking state. The VM path installed no signal handler and relied on
+    the child receiving SIGINT through the foreground process group — but
+    that kills this process too, so the teardown guard never ran and the
+    per-VM network namespace, tap device, ``nft`` DNAT table and any detached
+    ``dnsmasq`` were left behind. Leaked DNAT rules are the worst of those:
+    host ports stay redirected at a namespace with nothing behind it, so a
+    later legitimate bind on that port behaves strangely, and clearing it
+    needs a manual ``nft delete table``.
+    An interrupt now drives the same graceful path a normal exit takes — the
+    VM is shut down through the backend (which escalates from an ACPI
+    powerdown to a hard stop on its own timeout), reaped, and the teardown
+    guards run. Ctrl-C is the expected way to stop a foreground VM, so this
+    was the common path rather than an edge case.
