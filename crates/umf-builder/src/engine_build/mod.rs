@@ -137,6 +137,27 @@ pub enum EngineBuildError {
         detail: String,
     },
 
+    /// An `ADD <url>` destination resolved to an address the egress policy
+    /// refuses. Mirrors the `RUN`-step SSRF guard: a recipe must not be able
+    /// to reach host-internal services (loopback, the cloud-metadata IP,
+    /// RFC1918, ULA, CGNAT) and bake the response into a layer.
+    #[error(
+        "ADD {url}: egress to {target} refused — {address} is {category}. \
+        A build must not reach host-internal addresses; if this is a \
+        legitimate internal mirror, re-allow that category via \
+        UMF_ROOTLESS_NET_ALLOW."
+    )]
+    AddUrlEgressDenied {
+        /// The URL the directive asked for.
+        url: String,
+        /// The hop actually refused (differs from `url` after a redirect).
+        target: String,
+        /// The resolved address that tripped the policy.
+        address: String,
+        /// The address category that denied it.
+        category: String,
+    },
+
     /// An `ADD <url>` payload sniffed as a format the engine does not
     /// extract (squashfs — a filesystem image, not an archive). tar (plain
     /// or gzip/zstd/xz/bzip2-compressed) and zip extract natively; anything

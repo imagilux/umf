@@ -3975,6 +3975,7 @@ dependencies = [
  "tracing-subscriber",
  "umf-core",
  "umf-engine",
+ "umf-networking",
  "umf-oci",
  "umf-parser",
  "umf-vmm",

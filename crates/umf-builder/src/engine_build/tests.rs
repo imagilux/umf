@@ -434,6 +434,21 @@ async fn add_oci_image_with_traversal_destination_is_rejected() {
     );
 }
 
+/// Allow loopback egress for this test process so the fixture servers below
+/// are reachable, while leaving every *other* host-internal category denied —
+/// which is what the egress tests then assert against.
+///
+/// The policy is a process-wide `OnceLock`, so this is first-write-wins and
+/// safely idempotent; every test in this binary that touches `ADD <url>`
+/// calls it. Setting it programmatically (rather than via the environment)
+/// is deliberate: `std::env::set_var` is `unsafe` in edition 2024 and the
+/// workspace denies `unsafe_code`.
+fn allow_loopback_egress() {
+    umf_engine::rootless::set_egress_policy(umf_networking::ssrf::EgressPolicy::with_allowed(&[
+        umf_networking::ssrf::AddressCategory::Loopback,
+    ]));
+}
+
 /// Minimal HTTP/1.1 fixture server: serves `payload` with `status` for
 /// every request until the test process exits. Std-only, no shell.
 fn spawn_http(status: &'static str, payload: Vec<u8>) -> String {
@@ -479,6 +494,7 @@ fn targz_payload(path_in_tar: &str, contents: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_extracts_archives_and_places_files() {
+    allow_loopback_egress();
     use umf_engine::bundle::{Bundle, BundleOptions};
 
     let archive_url = spawn_http(
@@ -536,6 +552,7 @@ async fn add_url_extracts_archives_and_places_files() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_fetch_failure_is_a_clear_error() {
+    allow_loopback_egress();
     let gone = spawn_http("404 Not Found", b"nope".to_vec());
     let src = format!("FROM scratch\nADD {gone}/missing.tar.gz /\n");
     let ast = parse(&src).expect("parse");
@@ -559,6 +576,7 @@ async fn add_url_fetch_failure_is_a_clear_error() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_unsupported_archive_is_a_clear_error() {
+    allow_loopback_egress();
     // A squashfs superblock: sniffable, but a filesystem image — never
     // extracted (every archive format the sniffer knows extracts natively).
     let squashfs_magic = b"hsqs\x00\x00\x00\x00".to_vec();
@@ -606,6 +624,7 @@ fn compressed_tar_payload(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_extracts_zstd_xz_bzip2_tars_and_zip() {
+    allow_loopback_egress();
     use std::io::Write as _;
     use umf_engine::bundle::{Bundle, BundleOptions};
 
@@ -682,6 +701,7 @@ async fn add_url_extracts_zstd_xz_bzip2_tars_and_zip() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_zstd_that_is_not_a_tar_is_a_clear_error() {
+    allow_loopback_egress();
     // A zstd stream wrapping a plain string, not a tar. The magic marks it
     // for extraction (a compressed payload must wrap a tar), so it must fail
     // with a clear extract error rather than landing as a file.
@@ -710,6 +730,7 @@ async fn add_url_zstd_that_is_not_a_tar_is_a_clear_error() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_url_gzip_that_is_not_a_tar_is_a_clear_error() {
+    allow_loopback_egress();
     use std::io::Write as _;
     // A gzip stream wrapping a plain string, not a tar. The gzip magic marks
     // it for extraction, so it must fail with a clear extract error rather
@@ -737,5 +758,120 @@ async fn add_url_gzip_that_is_not_a_tar_is_a_clear_error() {
     assert!(
         matches!(err, EngineBuildError::AddUrlExtractFailed { .. }),
         "expected AddUrlExtractFailed, got {err:?}",
+    );
+}
+
+/// Fixture server that answers every request with a 302 to `location`.
+/// Used to prove a redirect hop is policy-checked, not blindly followed.
+fn spawn_redirect_to(location: &'static str) -> String {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let head = format!(
+                "HTTP/1.1 302 Found\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            );
+            let _ = stream.write_all(head.as_bytes());
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_url_refuses_the_cloud_metadata_address() {
+    // The canonical SSRF target. `RUN` egress has always refused it; `ADD`
+    // must too, or the recipe just uses the easier door and bakes instance
+    // credentials into a layer.
+    allow_loopback_egress();
+    let src = "FROM scratch\nADD http://169.254.169.254/latest/meta-data/ /loot\n";
+    let ast = parse(src).expect("parse");
+    let layout_dir = TempDir::new().unwrap();
+    let layout = ImageLayout::init(layout_dir.path()).unwrap();
+    let context = TempDir::new().unwrap();
+    let err = build_single_stage(
+        &layout,
+        context.path(),
+        &ast,
+        "example.invalid/x:1",
+        &EngineBuildOptions::default(),
+    )
+    .await
+    .expect_err("the metadata address must be refused");
+    match err {
+        EngineBuildError::AddUrlEgressDenied {
+            address, category, ..
+        } => {
+            assert_eq!(address, "169.254.169.254");
+            assert!(
+                category.contains("link-local"),
+                "category should name link-local, got {category}",
+            );
+        }
+        other => panic!("expected AddUrlEgressDenied, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_url_refuses_a_redirect_into_a_denied_address() {
+    // The subtle half: an allowlisted-looking public URL that 302s to a
+    // host-internal one. reqwest's automatic redirect policy would follow it
+    // without re-consulting the egress policy, so redirects are followed
+    // manually and every hop is re-checked.
+    allow_loopback_egress();
+    let redirector = spawn_redirect_to("http://169.254.169.254/latest/meta-data/");
+    let src = format!("FROM scratch\nADD {redirector}/innocent.tar.gz /\n");
+    let ast = parse(&src).expect("parse");
+    let layout_dir = TempDir::new().unwrap();
+    let layout = ImageLayout::init(layout_dir.path()).unwrap();
+    let context = TempDir::new().unwrap();
+    let err = build_single_stage(
+        &layout,
+        context.path(),
+        &ast,
+        "example.invalid/x:1",
+        &EngineBuildOptions::default(),
+    )
+    .await
+    .expect_err("a redirect into a denied address must be refused");
+    match err {
+        EngineBuildError::AddUrlEgressDenied {
+            target, address, ..
+        } => {
+            assert_eq!(address, "169.254.169.254");
+            assert!(
+                target.contains("169.254.169.254"),
+                "the refused hop should be named, got {target}",
+            );
+        }
+        other => panic!("expected AddUrlEgressDenied, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_url_refuses_a_private_range_address() {
+    // RFC1918 is denied by the same default, so an internal service is no
+    // more reachable than the metadata endpoint.
+    allow_loopback_egress();
+    let src = "FROM scratch\nADD http://10.0.0.1/internal.tar.gz /\n";
+    let ast = parse(src).expect("parse");
+    let layout_dir = TempDir::new().unwrap();
+    let layout = ImageLayout::init(layout_dir.path()).unwrap();
+    let context = TempDir::new().unwrap();
+    let err = build_single_stage(
+        &layout,
+        context.path(),
+        &ast,
+        "example.invalid/x:1",
+        &EngineBuildOptions::default(),
+    )
+    .await
+    .expect_err("an RFC1918 address must be refused");
+    assert!(
+        matches!(err, EngineBuildError::AddUrlEgressDenied { .. }),
+        "expected AddUrlEgressDenied, got {err:?}",
     );
 }

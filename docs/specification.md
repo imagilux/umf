@@ -131,6 +131,8 @@ A `RUN` step may reach the network during the build (to fetch packages, clone so
 umf build --rootless-net-allow rfc1918 -t myapp:1.0 .
 ```
 
+**The same policy governs `ADD <url>`.** A recipe's remote fetches are checked against this identical default-deny set, so `ADD` cannot reach a host-internal destination that `RUN` is refused — otherwise the constraint would only ever be one directive away from being bypassed. Two details make that hold: the destination is resolved by UMF and the vetted address is pinned for the connection (so a name cannot re-resolve to something else between the check and the connect), and redirects are followed manually with every hop re-checked (so a public URL cannot `302` into the metadata endpoint). A refusal names the address and the category that denied it, and the same `--rootless-net-allow` / `UMF_ROOTLESS_NET_ALLOW` escape hatch re-opens a category for an internal mirror. This applies to rootful and rootless builds alike, since the fetch is performed by the build process itself rather than inside a RUN sandbox.
+
 The backends, the address categories, and the operator workflow are detailed in the reference-implementation docs ([CLI](cli.md), [Prerequisites](prerequisites.md), [Troubleshooting](troubleshooting.md)). The normative point is the security posture: outbound egress from a RUN step is namespaced, and host-internal destinations are denied by default.
 
 ---
