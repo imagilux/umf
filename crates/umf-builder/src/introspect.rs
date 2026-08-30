@@ -14,6 +14,7 @@ use oci_client::manifest::{
     IMAGE_CONFIG_MEDIA_TYPE, IMAGE_DOCKER_CONFIG_MEDIA_TYPE, OciImageManifest, OciManifest,
 };
 use serde::Deserialize;
+use umf_core::architecture::Architecture;
 use umf_core::l0::{L0Kind, L0Source};
 use umf_core::label;
 
@@ -80,8 +81,50 @@ pub fn introspect(layout: &ImageLayout, ref_name: &str) -> Result<L0Profile, Reg
     match manifest {
         OciManifest::Image(image) => introspect_image(layout, &entry.digest, &image),
         OciManifest::ImageIndex(_) => Err(RegistryError::InvalidLayout(format!(
-            "{ref_name} resolves to an image index — select a platform before introspection",
+            "{ref_name} resolves to an image index — select a platform before introspection \
+             (use `introspect_for_platform`)",
         ))),
+    }
+}
+
+/// [`introspect`], but resolving an image index to the child manifest for
+/// `architecture` first.
+///
+/// Publishing a kernel or a base as a multi-arch index is the natural thing
+/// to do, and [`introspect`] cannot read one — it errors. Callers that used
+/// to swallow that error treated every index as "not a kernel", silently
+/// turning a bootable build into a container build. This is the entry point
+/// for anything deciding what an image *is*.
+///
+/// # Errors
+/// As [`introspect`], plus [`RegistryError::InvalidLayout`] when the index
+/// lists no Linux manifest for `architecture`.
+pub fn introspect_for_platform(
+    layout: &ImageLayout,
+    ref_name: &str,
+    architecture: Architecture,
+) -> Result<L0Profile, RegistryError> {
+    let entry = layout
+        .lookup_ref(ref_name)?
+        .ok_or_else(|| RegistryError::NotFound(ref_name.to_string()))?;
+
+    let manifest_bytes = layout.read_blob(&entry.digest)?;
+    let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
+
+    match manifest {
+        OciManifest::Image(image) => introspect_image(layout, &entry.digest, &image),
+        OciManifest::ImageIndex(index) => {
+            let chosen =
+                crate::platform::select_for_arch(&index, architecture).ok_or_else(|| {
+                    RegistryError::InvalidLayout(format!(
+                        "{ref_name} is a multi-arch index with no linux/{} manifest",
+                        architecture.oci_arch_string(),
+                    ))
+                })?;
+            let child_bytes = layout.read_blob(&chosen.digest)?;
+            let child: OciImageManifest = serde_json::from_slice(&child_bytes)?;
+            introspect_image(layout, &chosen.digest, &child)
+        }
     }
 }
 

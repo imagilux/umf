@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use oci_client::Reference;
 use thiserror::Error;
-use tracing::info;
+use tracing::{debug, info};
 use umf_builder::bootable::{BootableBuildError, BootableBuildOptions, build_vm};
 use umf_oci::image::LayerCompression;
 
@@ -20,10 +20,11 @@ use umf_builder::engine_build::{
 use umf_builder::host_requirements::{
     MissingRuntimeError, compute_requirements, detect_all_for, verify_requirements_for,
 };
-use umf_builder::introspect::introspect;
+use umf_builder::introspect::introspect_for_platform;
 use umf_builder::resolver::resolve_add;
 use umf_core::architecture::Architecture;
 use umf_core::ast::{Ast, FromSource};
+use umf_core::l0::L0Kind;
 use umf_oci::registry::auth::resolve_auth_for;
 use umf_oci::registry::{ImageLayout, RegistryClient, RegistryError};
 
@@ -255,20 +256,42 @@ fn probe_bootable(
     // `docker.io/imagilux/kernel-linux:7.0`), so introspect that form — not the
     // literal source string — or a cached image is missed.
     let canonical = parsed.whole();
+    // Mirror the arch the real build will use, so the shape decision and the
+    // build agree about which child of a multi-arch index they are looking at.
+    // A malformed `--platform` is reported by the build proper; here it just
+    // falls back to the host.
+    let arch = args
+        .platform
+        .as_deref()
+        .and_then(|p| Architecture::from_platform_str(p).ok())
+        .unwrap_or_else(Architecture::host);
     rt.block_on(async {
         // Pull (best-effort) so the type label is readable from the cache.
-        let _ = resolve_add(
-            &reference,
-            Architecture::host(),
-            Some(&client),
-            layout,
-            None,
-            None,
-        )
-        .await;
-        introspect(layout, &canonical)
-            .map(|p| p.kind.is_kernel())
-            .unwrap_or(false)
+        let _ = resolve_add(&reference, arch, Some(&client), layout, None, None).await;
+        // Platform-aware: a kernel published as a multi-arch index used to
+        // fail introspection, and the failure was swallowed into "not a
+        // kernel" — silently building a container from a kernel base.
+        match introspect_for_platform(layout, &canonical, arch) {
+            // A kernel base makes the build bootable. So does a `type=bootable`
+            // base per the spec — and routing it here matters even though the
+            // builder cannot extend one yet: the bootable path rejects it with
+            // a message naming the reason, whereas falling through to the
+            // container path silently produced a container with a kernel in it
+            // that `umf compile` later refused for unrelated-looking reasons.
+            Ok(profile) => profile.kind.is_kernel() || profile.kind == L0Kind::Bootable,
+            // A base we cannot introspect is not evidence of a container.
+            // It is usually unreachable (offline, private registry) and the
+            // container path will report that properly; log so a
+            // shape-surprise is traceable rather than silent.
+            Err(e) => {
+                debug!(
+                    reference = %canonical,
+                    error = %e,
+                    "could not introspect FROM; treating the build as a container",
+                );
+                false
+            }
+        }
     })
 }
 

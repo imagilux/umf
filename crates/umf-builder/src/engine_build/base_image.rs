@@ -100,44 +100,29 @@ pub(crate) fn resolve_base_image(
     compression: umf_oci::image::LayerCompression,
 ) -> Result<BaseImage, EngineBuildError> {
     use oci_client::manifest::OciManifest;
-    use oci_spec::image::{Arch, Os};
-
-    // The target arch as an OCI `Arch`. `oci_arch_string` yields the OCI
-    // shorthand (`amd64` / `arm64`), which `Arch::from(&str)` maps to the
-    // matching variant, so adding an architecture stays a single
-    // `umf_core::Architecture` change.
-    let want_arch = Arch::from(architecture.oci_arch_string());
 
     let entry = layout
         .lookup_ref(ref_name)?
         .ok_or_else(|| RegistryError::NotFound(ref_name.to_string()))?;
     let manifest_bytes = layout.read_blob(&entry.digest)?;
+    // Whether the arch still needs checking after the match. The index path
+    // selects *by* platform, so it is already correct; a bare manifest
+    // carries its architecture only in its config, which is read below.
+    let mut arch_unverified = false;
     let manifest: OciImageManifest = match serde_json::from_slice::<OciManifest>(&manifest_bytes)? {
-        OciManifest::Image(image) => image,
+        OciManifest::Image(image) => {
+            arch_unverified = true;
+            image
+        }
         OciManifest::ImageIndex(index) => {
             // Select the manifest whose platform matches the requested
-            // `--platform` arch. Prefer the variant-less match, then any
-            // variant of the same arch. No match is an error: silently
-            // falling back to the first manifest would pull the wrong arch.
-            let chosen = index
-                .manifests
-                .iter()
-                .find(|m| {
-                    m.platform.as_ref().is_some_and(|p| {
-                        p.os == Os::Linux
-                            && p.architecture == want_arch
-                            && p.variant.as_deref().is_none_or(|v| v.is_empty())
-                    })
-                })
-                .or_else(|| {
-                    index.manifests.iter().find(|m| {
-                        m.platform
-                            .as_ref()
-                            .is_some_and(|p| p.os == Os::Linux && p.architecture == want_arch)
-                    })
-                })
-                .ok_or_else(|| EngineBuildError::NoManifestForPlatform {
-                    arch: architecture.oci_arch_string().to_string(),
+            // `--platform` arch. No match is an error: silently falling back
+            // to the first manifest would pull the wrong arch.
+            let chosen =
+                crate::platform::select_for_arch(&index, architecture).ok_or_else(|| {
+                    EngineBuildError::NoManifestForPlatform {
+                        arch: architecture.oci_arch_string().to_string(),
+                    }
                 })?;
             let child_bytes = layout.read_blob(&chosen.digest)?;
             serde_json::from_slice(&child_bytes)?
@@ -146,6 +131,24 @@ pub(crate) fn resolve_base_image(
 
     let config_bytes = layout.read_blob(&manifest.config.digest)?;
     let raw_config: serde_json::Value = serde_json::from_slice(&config_bytes)?;
+
+    // A single-platform base has had nothing check its architecture, and
+    // `image_config_from_raw` is about to stamp the *target* arch onto the
+    // emitted config. Without this, `--platform=linux/arm64` against an amd64
+    // base would succeed and publish an image whose config claims arm64 while
+    // its layers are amd64 — the exact failure the index path's comment says
+    // it exists to prevent.
+    if arch_unverified
+        && let Some(found) = raw_config.get("architecture").and_then(|v| v.as_str())
+        && found != architecture.oci_arch_string()
+    {
+        return Err(EngineBuildError::BaseImageArchMismatch {
+            reference: ref_name.to_string(),
+            want: architecture.oci_arch_string().to_string(),
+            found: found.to_string(),
+        });
+    }
+
     let image_config = image_config_from_raw(&raw_config, architecture);
 
     let diff_ids = extract_diff_ids(&raw_config);

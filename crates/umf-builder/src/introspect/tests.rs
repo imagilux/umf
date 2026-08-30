@@ -5,8 +5,9 @@
 use super::*;
 use oci_client::manifest::{
     IMAGE_LAYER_MEDIA_TYPE, ImageIndexEntry, OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
-    OciDescriptor, OciImageIndex,
+    OciDescriptor, OciImageIndex, Platform,
 };
+use oci_spec::image::{Arch, Os};
 use serde_json::json;
 use std::fs;
 use tempfile::tempdir;
@@ -366,5 +367,85 @@ fn labels_are_passed_through_for_downstream_inspection() {
             .get("org.opencontainers.image.source")
             .map(String::as_str),
         Some("https://example.invalid/x"),
+    );
+}
+
+#[test]
+fn introspect_for_platform_reads_through_an_image_index() {
+    // A kernel published as a multi-arch index used to be un-introspectable:
+    // `introspect` errored, and the shape decision swallowed that into "not a
+    // kernel", silently turning a bootable build into a container build.
+    use umf_core::architecture::Architecture;
+
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("init");
+
+    // A child that self-describes as a kernel, reachable only via an index.
+    let child_ref = stage_image(
+        &layout,
+        "example.invalid/kernel-child:1",
+        &[(label::TYPE, "kernel")],
+        1,
+        IMAGE_CONFIG_MEDIA_TYPE,
+    );
+    let child = layout
+        .lookup_ref(&child_ref)
+        .expect("lookup")
+        .expect("child present");
+
+    let index = OciImageIndex {
+        schema_version: 2,
+        media_type: Some(OCI_IMAGE_INDEX_MEDIA_TYPE.to_string()),
+        manifests: vec![ImageIndexEntry {
+            media_type: OCI_IMAGE_MEDIA_TYPE.to_string(),
+            digest: child.digest.clone(),
+            size: child.size,
+            platform: Some(Platform {
+                architecture: Arch::from("amd64"),
+                os: Os::Linux,
+                os_version: None,
+                os_features: None,
+                variant: None,
+                features: None,
+            }),
+            annotations: None,
+        }],
+        artifact_type: None,
+        annotations: None,
+    };
+    let bytes = serde_json::to_vec(&index).expect("serialize index");
+    let digest = layout.write_blob(&bytes).expect("write index");
+    let index_ref = "example.invalid/kernel-index:1";
+    layout
+        .upsert_ref(
+            index_ref,
+            ImageIndexEntry {
+                media_type: OCI_IMAGE_INDEX_MEDIA_TYPE.to_string(),
+                digest,
+                size: bytes.len() as i64,
+                platform: None,
+                annotations: None,
+            },
+        )
+        .expect("upsert index ref");
+
+    // The plain entry point still refuses an index...
+    assert!(
+        introspect(&layout, index_ref).is_err(),
+        "introspect must not guess a platform",
+    );
+    // ...while the platform-aware one resolves the child and sees the kernel.
+    let profile = introspect_for_platform(&layout, index_ref, Architecture::X86_64)
+        .expect("index resolves for the requested arch");
+    assert!(
+        profile.kind.is_kernel(),
+        "a kernel behind an index must still read as a kernel, got {:?}",
+        profile.kind,
+    );
+
+    // And an arch the index does not list is a clear error, not a silent miss.
+    assert!(
+        introspect_for_platform(&layout, index_ref, Architecture::Aarch64).is_err(),
+        "an unlisted arch must fail rather than resolve to the wrong child",
     );
 }
