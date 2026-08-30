@@ -194,6 +194,10 @@ Key/value metadata written to the OCI manifest. Used for structural information:
 
 Labels are inherited from previous layers when building on top of an existing image.
 
+Re-declaring a key **overrides** it — last wins — which is how a derived image overrides a label inherited from its base. This holds for both shapes: a container build writes labels into the OCI config map, and a bootable build resolves its `org.imagilux.umf.*` boot-manifest keys the same way.
+
+On a bootable build the boot-manifest keys the builder derives (`kernel.release`, `kernel.vmlinuz`, `initramfs`, `rootfs.fs`, `entrypoint`) are written **after** the recipe's own labels, so a recipe cannot forge one and make `umf compile` read a value the builder did not derive. `org.imagilux.umf.flavor` is the exception by design: it is an *input* the author sets, so the recipe's value is what takes effect.
+
 One `LABEL` may carry multiple `key=value` pairs on a single line (regular Docker style); it is exactly equivalent to writing one `LABEL` per pair.
 
 #### Example

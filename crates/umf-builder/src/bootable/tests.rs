@@ -736,3 +736,101 @@ fn appliance_cmdline_none_for_init_systems_and_none() {
     assert_eq!(appliance_init_cmdline(&EntrypointInit::OpenRc), None);
     assert_eq!(appliance_init_cmdline(&EntrypointInit::None), None);
 }
+
+#[tokio::test]
+async fn user_labels_and_env_reach_the_emitted_bootable_config() {
+    // A bootable image is a normal OCI image, so the recipe's own metadata
+    // must survive into it. The emitted config previously carried *only* the
+    // six `org.imagilux.umf.*` boot-manifest keys and nothing else, so
+    // `org.opencontainers.image.*` — the set registries and scanners key off
+    // — was impossible to attach to a bootable artifact.
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("layout");
+    let src = "FROM imagilux/kernel-linux:7.0\n\
+               ARG VERSION=9.9.9\n\
+               LABEL org.opencontainers.image.version=${VERSION}\n\
+               LABEL org.example.team=platform\n\
+               ENV APP_HOME=/opt/app\n\
+               LABEL org.imagilux.umf.flavor=systemd-boot\n\
+               ENTRYPOINT /myapp\n";
+    let ast = parse(src).expect("parse");
+    let tag = "example.invalid/bootable:metadata";
+    let opts = options_with_overrides(dir.path(), "7.0");
+
+    build_vm(&ast, &layout, None, tag, &opts, &no_stages())
+        .await
+        .expect("build_vm");
+
+    let profile = introspect(&layout, tag).expect("introspect");
+    assert_eq!(
+        profile
+            .labels
+            .get("org.opencontainers.image.version")
+            .map(String::as_str),
+        Some("9.9.9"),
+        "a user label must survive, with ${{VAR}} substituted",
+    );
+    assert_eq!(
+        profile.labels.get("org.example.team").map(String::as_str),
+        Some("platform"),
+    );
+    // The boot manifest is still intact alongside the user's labels.
+    assert_eq!(
+        profile.labels.get(label::FLAVOR).map(String::as_str),
+        Some("systemd-boot"),
+    );
+    assert!(
+        profile.labels.contains_key(label::KERNEL_RELEASE),
+        "boot-manifest keys must not be displaced by user labels",
+    );
+
+    // ENV lands in the config's env list.
+    let manifest: oci_client::manifest::OciImageManifest = serde_json::from_slice(
+        &layout
+            .read_blob(&profile.manifest_digest)
+            .expect("manifest"),
+    )
+    .expect("parse manifest");
+    let config: serde_json::Value =
+        serde_json::from_slice(&layout.read_blob(&manifest.config.digest).expect("config"))
+            .expect("parse config");
+    let env: Vec<&str> = config
+        .pointer("/config/Env")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|e| e.as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        env.contains(&"APP_HOME=/opt/app"),
+        "ENV must reach the emitted config, got {env:?}",
+    );
+}
+
+#[tokio::test]
+async fn a_user_label_cannot_displace_a_boot_manifest_key() {
+    // Boot-manifest keys are written after the user's, so a recipe cannot
+    // forge one and make `umf compile` read a value the builder did not
+    // derive.
+    let dir = tempdir().expect("tempdir");
+    let layout = ImageLayout::init(dir.path()).expect("layout");
+    let src = "FROM imagilux/kernel-linux:7.0\n\
+               LABEL org.imagilux.umf.kernel.release=totally-wrong\n\
+               LABEL org.imagilux.umf.flavor=systemd-boot\n\
+               ENTRYPOINT /myapp\n";
+    let ast = parse(src).expect("parse");
+    let tag = "example.invalid/bootable:forged";
+    let opts = options_with_overrides(dir.path(), "7.0");
+
+    build_vm(&ast, &layout, None, tag, &opts, &no_stages())
+        .await
+        .expect("build_vm");
+
+    let profile = introspect(&layout, tag).expect("introspect");
+    assert_eq!(
+        profile
+            .labels
+            .get(label::KERNEL_RELEASE)
+            .map(String::as_str),
+        Some("7.0"),
+        "the builder's derived value must win over a forged one",
+    );
+}

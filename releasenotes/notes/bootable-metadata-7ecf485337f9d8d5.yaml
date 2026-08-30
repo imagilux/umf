@@ -1,0 +1,26 @@
+---
+fixes:
+  - |
+    Bootable builds no longer discard the recipe's ``LABEL`` and ``ENV``
+    directives. The emitted OCI config carried *only* the six
+    ``org.imagilux.umf.*`` boot-manifest keys and nothing else, so a bootable
+    image could not carry ``org.opencontainers.image.*`` metadata — source,
+    revision, version, licenses, the set registries and scanners key off —
+    and the recipe's ``ENV`` never reached the config. Both are now carried,
+    with ``${VAR}`` resolved against the ARG scope in force at that point.
+    ``ENV`` already reached the micro-VM ``RUN`` steps, so this affects the
+    emitted metadata rather than build behaviour.
+    Boot-manifest keys are written **after** the recipe's labels, so a
+    derived value the builder computed (``kernel.release``,
+    ``kernel.vmlinuz``, ``initramfs``, ``rootfs.fs``, ``entrypoint``) always
+    wins over a same-named label in the recipe — a recipe cannot forge one
+    and make ``umf compile`` read something the builder did not derive.
+    ``org.imagilux.umf.flavor`` remains author-set, since it is an input.
+  - |
+    A repeated ``LABEL`` key now resolves **last-wins** on the bootable path,
+    matching the container path (which writes labels into a map) and the
+    Docker-shaped idiom of re-declaring a label to override an inherited one.
+    Selecting the boot flavor previously took the *first* match, so the same
+    recipe resolved differently depending on what ``FROM`` had resolved to.
+    The specification's ``LABEL`` section now states the precedence
+    explicitly rather than leaving it to the implementations.
