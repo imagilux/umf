@@ -113,6 +113,26 @@ UMF is UEFI-only and needs an OVMF/EDK II firmware blob to boot a compiled disk.
 
 `FROM scratch` starts from a genuinely empty filesystem, so the first `RUN` has no shell — or any binary — to execute, and fails at exec the same way docker's does. `ADD` the tooling first (a static busybox, your compiled binary) and a subsequent `RUN` sees it through the overlay; or keep scratch stages to `ADD` + metadata, the static-appliance shape they're made for.
 
+## `ADD <url>` fails with "egress to … refused"
+
+```
+error: ADD http://mirror.internal/pkg.tar.gz: egress to
+       http://10.0.0.7/pkg.tar.gz refused — 10.0.0.7 is rfc1918. A build must
+       not reach host-internal addresses; if this is a legitimate internal
+       mirror, re-allow that category via UMF_ROOTLESS_NET_ALLOW.
+```
+
+`ADD <url>` is governed by the same default-deny SSRF policy as `RUN`-step egress (see [RUN-step Network Egress](specification.md#run-step-network-egress)): loopback, link-local (including the `169.254.169.254` cloud-metadata IP), RFC1918, IPv6 unique-local, and CGNAT are refused. The check runs on the **resolved** address, so a public hostname that resolves into one of those ranges is refused too, and it re-runs on every redirect hop — a `302` into a denied address is caught rather than followed.
+
+If the destination is a legitimate internal mirror, re-allow just that category:
+
+```bash
+umf build --rootless-net-allow rfc1918 -t myapp:1.0 .
+# or: UMF_ROOTLESS_NET_ALLOW=rfc1918 umf build -t myapp:1.0 .
+```
+
+The flag wins over the environment variable. Re-allow the narrowest category that unblocks you rather than the whole set — `loopback` and `link-local` in particular are what protect the host's own services and the cloud-metadata endpoint.
+
 ## `ADD <url>` fails with "fetched payload is a … filesystem image"
 
 ```

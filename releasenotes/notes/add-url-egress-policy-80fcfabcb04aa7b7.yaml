@@ -1,0 +1,21 @@
+---
+security:
+  - |
+    ``ADD <url>`` fetches are now governed by the same default-deny SSRF
+    egress policy that guards ``RUN``-step traffic. Previously ``ADD`` used a
+    bare HTTP client with no address classification and reqwest's automatic
+    redirect following, so a recipe could reach host-internal destinations —
+    the cloud-metadata endpoint at ``169.254.169.254``, loopback services,
+    RFC1918 hosts — that a ``RUN`` step was refused, and bake the response
+    into a published layer. The constraint was therefore only ever one
+    directive away from being bypassed.
+    Two details make the new check hold rather than merely appear to: the
+    destination is resolved by UMF and the vetted address is **pinned** for
+    the connection, closing the DNS-rebinding window between check and
+    connect; and redirects are followed **manually** with every hop
+    re-checked, so a public URL cannot ``302`` into a denied address.
+    The policy consulted is the one the ``RUN`` sandbox already uses, so the
+    operator escape hatch is the existing ``--rootless-net-allow`` flag (or
+    ``UMF_ROOTLESS_NET_ALLOW``) rather than a second, divergent knob. A
+    refusal names the address and the category that denied it. Both the
+    container and bootable ``ADD <url>`` paths are covered.

@@ -14,6 +14,11 @@ umf-core = { workspace = true }
 umf-oci = { workspace = true }
 umf-engine = { workspace = true }
 umf-vmm = { workspace = true }
+# `ADD <url>` egress is governed by the same default-deny SSRF policy the
+# RUN sandbox uses (umf_networking::ssrf). A direct edge rather than reaching
+# through umf-engine: the dependency is real and the tree stays acyclic
+# (umf-networking has no internal umf deps).
+umf-networking = { workspace = true }
 bytes = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true }
@@ -26,7 +31,9 @@ sha2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+# `net` for `lookup_host`: `ADD <url>` resolves the destination itself so the
+# egress policy can vet the address before the connect.
+tokio = { workspace = true, features = ["net"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 walkdir = { workspace = true }
