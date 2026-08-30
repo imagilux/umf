@@ -44,23 +44,42 @@ pub(super) fn validate_ast_for_vm(ast: &Ast) -> Result<&Stage, BootableBuildErro
 /// Returns the flavor value plus whether it was defaulted (label absent), so
 /// the caller can warn. Default: `systemd-boot` (classic) — the common case;
 /// `umf compile` validates the value and fails on an unrecognised one.
+///
+/// **Last wins** on a repeated label. The container path writes labels into a
+/// map, so a re-declared key overwrites there; this used to return the first
+/// match, which meant the same recipe resolved differently depending on what
+/// `FROM` had resolved to. Re-declaring a label to override an inherited one
+/// is also the Docker-shaped idiom the project deliberately follows.
 pub(super) fn pick_flavor(stage: &Stage) -> (&str, bool) {
-    for directive in &stage.directives {
-        if let Directive::Label(l) = directive
-            && l.key.value.as_str() == label::FLAVOR
-        {
-            return (l.value.value.as_str(), false);
-        }
-    }
-    ("systemd-boot", true)
+    stage
+        .directives
+        .iter()
+        .rev()
+        .find_map(|directive| match directive {
+            Directive::Label(l) if l.key.value.as_str() == label::FLAVOR => {
+                Some((l.value.value.as_str(), false))
+            }
+            _ => None,
+        })
+        .unwrap_or(("systemd-boot", true))
 }
 
 /// Pull the `ENTRYPOINT <init>` directive out of the stage.
+///
+/// Traverses in reverse for symmetry with [`pick_flavor`], but the order is
+/// unobservable: the parser rejects a second `ENTRYPOINT` in a stage, so at
+/// most one can ever be present. Kept consistent so a future relaxation of
+/// that rule does not silently reintroduce first-wins here.
 pub(super) fn pick_entrypoint(stage: &Stage) -> Option<&EntrypointInit> {
-    for directive in &stage.directives {
-        if let Directive::Entrypoint(e) = directive {
-            return Some(&e.init);
-        }
-    }
-    None
+    stage
+        .directives
+        .iter()
+        .rev()
+        .find_map(|directive| match directive {
+            Directive::Entrypoint(e) => Some(&e.init),
+            _ => None,
+        })
 }
+
+#[cfg(test)]
+mod tests;

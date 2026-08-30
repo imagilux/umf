@@ -496,10 +496,30 @@ pub async fn build_vm(
     // guards inside the `add_*_into_staging` helpers run on the substituted
     // values, so a `${VAR}` that expands to a `..` cannot smuggle a traversal.
     let mut arg_scope = globals.clone();
+    // User metadata collected as we walk, so `${VAR}` resolves against the
+    // ARG scope in force at that point — the same rule the container path
+    // uses. `BTreeMap::insert` is last-wins, matching how a repeated key
+    // behaves elsewhere.
+    let mut user_labels: BTreeMap<String, String> = BTreeMap::new();
+    let mut user_env: BTreeMap<String, String> = BTreeMap::new();
     for directive in &stage.directives {
         match directive {
             Directive::Arg(arg) => {
                 crate::arg_subst::apply_arg_to_scope(&mut arg_scope, arg, &options.build_args);
+                continue;
+            }
+            Directive::Label(l) => {
+                user_labels.insert(
+                    l.key.value.as_str().to_string(),
+                    crate::arg_subst::subst_with(&arg_scope, l.value.value.as_str()),
+                );
+                continue;
+            }
+            Directive::Env(e) => {
+                user_env.insert(
+                    e.key.value.as_str().to_string(),
+                    crate::arg_subst::subst_with(&arg_scope, e.value.value.as_str()),
+                );
                 continue;
             }
             Directive::Add(add) => {
@@ -603,7 +623,12 @@ pub async fn build_vm(
     // Boot manifest: `org.imagilux.umf.*` labels that fully describe the
     // projection, so `umf compile` can shape a disk from the image alone — no
     // recipe, no second resolution. The disk itself is never an artifact.
-    let mut labels = BTreeMap::new();
+    // User `LABEL`s first; the `org.imagilux.umf.*` boot-manifest keys are
+    // inserted after, so they win a collision. A bootable image is a normal
+    // OCI image, and dropping the recipe's labels made
+    // `org.opencontainers.image.*` metadata — source, revision, version, the
+    // set registries and scanners key off — impossible to carry.
+    let mut labels = user_labels;
     labels.insert(
         label::ENTRYPOINT.to_string(),
         entrypoint_label(&entrypoint_init),
@@ -642,6 +667,14 @@ pub async fn build_vm(
         umf_type: L0Kind::Bootable,
         container: ContainerConfig {
             labels,
+            // `ENV` already reaches the micro-VM RUN steps (see
+            // `bootable::run`); this carries it into the emitted config too,
+            // so the image records what the recipe declared rather than
+            // silently discarding it.
+            env: user_env
+                .into_iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect(),
             ..ContainerConfig::default()
         },
         ..ImageConfig::default()
