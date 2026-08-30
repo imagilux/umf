@@ -78,4 +78,10 @@ Use `--vmm=qemu` (the default) for the most forgiving firmware story, or a guest
 
 ## OCI layer encoding
 
-`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`. On the **read** side UMF transparently applies gzip-, zstd-, and uncompressed-tar layers, and the build-staging unpacker additionally decodes xz- and bzip2-compressed tars (for fetched `ADD <url>` payloads — a layer blob is never xz/bzip2). An `…tar+xz` **layer** is rejected: the codec is only wired for `ADD` payloads, not for layer blobs. gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).
+`umf build` emits gzip-compressed tar layers (`application/vnd.oci.image.layer.v1.tar+gzip`) by default and zstd (`…tar+zstd`, the OCI 1.1 media type) with `--compression zstd`.
+
+On the **read** side, codec selection is centralised: one decoder fingerprints the payload's leading magic and handles a plain tar or a gzip-, zstd-, xz-, or bzip2-compressed one. The same decoder serves both layer blobs and fetched `ADD <url>` payloads, so the two accept an identical set — they used to be separate lists that had drifted apart.
+
+What still differs is the **media-type allowlist**, and only for layers. The container engine accepts the three layer media types the OCI image-spec defines — `…v1.tar`, `…v1.tar+gzip`, `…v1.tar+zstd` (plus Docker's gzip alias) — and rejects anything else, including `…v1.tar+xz`. That is a media-type decision, not a capability one: the decoder could read those bytes, but `+xz` is not a spec-defined layer type, so declaring one is out-of-spec and refused rather than quietly accepted. A payload's *bytes* being xz is fine anywhere the media type is one of the three.
+
+gzip layers interoperate with any OCI registry and with `docker` / `podman` / `skopeo`; zstd layers need OCI-1.1-aware consumers (current containerd / podman / skopeo read them, older Docker daemons do not).

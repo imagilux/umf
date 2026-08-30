@@ -125,8 +125,11 @@ fn a_zip_fed_to_the_tar_unpacker_is_refused() {
         .unpack_tar_bytes(&zip_bytes)
         .expect_err("zip is not a tar stream");
     assert!(
-        matches!(err, StagingError::NotATar("zip")),
-        "expected NotATar(zip), got {err:?}"
+        matches!(
+            err,
+            StagingError::Decode(crate::compression::DecodeError::NotATar("zip"))
+        ),
+        "expected Decode(NotATar(zip)), got {err:?}"
     );
 }
 

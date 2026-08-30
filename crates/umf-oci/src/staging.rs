@@ -18,9 +18,6 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use bzip2::read::BzDecoder;
-use flate2::read::GzDecoder;
-use liblzma::read::XzDecoder;
 use tempfile::TempDir;
 use thiserror::Error;
 use tracing::debug;
@@ -36,12 +33,10 @@ pub enum StagingError {
 
     /// The stream is a recognised format that is not a tar and cannot be
     /// unpacked as one (a zip, which is a seekable container — route it
-    /// through [`BuildStaging::unpack_zip`] — or a squashfs image).
-    #[error(
-        "`{0}` payload cannot be unpacked as a tar stream (staging accepts \
-         plain tar, or gzip/zstd/xz/bzip2-compressed tar)"
-    )]
-    NotATar(&'static str),
+    /// through [`BuildStaging::unpack_zip`] — or a squashfs image), or its
+    /// decoder could not be started.
+    #[error(transparent)]
+    Decode(#[from] crate::compression::DecodeError),
 
     /// Zip archive unpacking failed (corrupt central directory, bad entry,
     /// unsupported entry codec, …).
@@ -114,50 +109,11 @@ impl BuildStaging {
     }
 
     fn unpack_tar_stream<R: Read>(&self, source: R) -> Result<(), StagingError> {
-        // Peek the leading bytes (enough for the longest compression magic, xz
-        // at 6) and fingerprint via `format::detect`, so we route each codec
-        // to its decoder, reject a stream that can't be a tar with a clear
-        // error, and otherwise treat the stream as a plain tar.
-        let mut reader = std::io::BufReader::new(source);
-        let mut peek = [0u8; 6];
-        let peeked = crate::materialize::read_full(&mut reader, &mut peek)?;
-        let format = crate::format::detect(&peek[..peeked]);
-
-        // We can't easily put the peeked bytes back into the BufReader — work
-        // around that by chaining a cursor over the peek with the rest of the
-        // reader.
-        let combined = std::io::Read::chain(&peek[..peeked], reader);
-
-        // Cap the decompressed byte count so a decompression bomb can't fill
-        // the disk (mirrors `materialize::apply_layer`).
-        use crate::format::Format;
-        use crate::materialize::CappedReader;
-        let cap = crate::materialize::max_uncompressed_layer_bytes();
-        match format {
-            Format::Gzip => {
-                self.unpack_tar_into_staging(CappedReader::new(GzDecoder::new(combined), cap))
-            }
-            Format::Zstd => self.unpack_tar_into_staging(CappedReader::new(
-                zstd::stream::read::Decoder::new(combined)?,
-                cap,
-            )),
-            Format::Xz => {
-                self.unpack_tar_into_staging(CappedReader::new(XzDecoder::new(combined), cap))
-            }
-            Format::Bzip2 => {
-                self.unpack_tar_into_staging(CappedReader::new(BzDecoder::new(combined), cap))
-            }
-            // A zip is a seekable container (its index lives at the end of the
-            // file), not a stream — [`Self::unpack_zip`] is its entry point.
-            Format::Zip => Err(StagingError::NotATar("zip")),
-            Format::Squashfs => Err(StagingError::NotATar("squashfs")),
-            // A 6-byte prefix can't see the `ustar` magic at offset 257, so a
-            // plain tar reads as `Unknown` here — that's fine, it falls through
-            // to the uncompressed-tar branch below.
-            Format::Tar | Format::Unknown => {
-                self.unpack_tar_into_staging(CappedReader::new(combined, cap))
-            }
-        }
+        // Codec selection lives in `crate::compression`, shared with the layer
+        // reader, so a fetched payload and a layer blob accept the same set —
+        // plain tar, or a gzip/zstd/xz/bzip2-compressed tar.
+        let (_format, decoded) = crate::compression::decode_tar_stream(source)?;
+        self.unpack_tar_into_staging(decoded)
     }
 
     /// Unpack a zip archive sitting at `zip_path` into the staging tree.

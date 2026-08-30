@@ -1,0 +1,22 @@
+---
+fixes:
+  - |
+    Layer blobs may now be xz- or bzip2-compressed, not just gzip, zstd, or
+    uncompressed. Codec selection was implemented twice — once for layer
+    blobs and once for fetched ``ADD <url>`` payloads — and the two had
+    drifted: a tarball the staging unpacker read happily was rejected on the
+    layer path for no reason a caller could have predicted. Both now share a
+    single decoder (``umf_oci::compression``), so a plain tar and a gzip-,
+    zstd-, xz-, or bzip2-compressed one are accepted identically wherever a
+    tar stream is read, and the decompression ceiling that guards against
+    archive bombs applies uniformly across every codec including the
+    uncompressed case.
+    A payload that cannot be a tar stream at all — a zip, whose index lives
+    at the end of the file, or a squashfs filesystem image — now fails with a
+    message naming the format instead of handing malformed bytes to the tar
+    reader.
+    The container engine's layer **media-type** allowlist is unchanged and
+    still accepts only the three types the OCI image-spec defines
+    (``…v1.tar``, ``…v1.tar+gzip``, ``…v1.tar+zstd``, plus Docker's gzip
+    alias); ``…v1.tar+xz`` remains refused as an out-of-spec layer type,
+    which is a media-type decision rather than a decoding limitation.

@@ -35,6 +35,7 @@
 //!   container runtime needed.
 
 pub mod archive;
+pub mod compression;
 pub mod erofs;
 pub mod format;
 pub mod image;
