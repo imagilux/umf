@@ -42,7 +42,9 @@ tempfile = { workspace = true }
 # needed (air-gapped / sovereignty-first).
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# `signal` for Ctrl-C handling on the VM run path: an interrupt must run
+# the same teardown a normal exit does, or the per-VM netns/tap/nft rules leak.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 

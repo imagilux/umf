@@ -321,6 +321,7 @@ fn run_vm(
     );
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async move {
+        let mut exit_code: Option<i32> = None;
         let runner: Box<dyn VmRuntime> = match backend {
             VmmKind::Qemu => Box::new(QemuRuntime::default()),
             VmmKind::CloudHypervisor => Box::new(CloudHypervisorRuntime::default()),
@@ -328,13 +329,33 @@ fn run_vm(
         let mut vm = runner.create(&spec).await?;
         runner.boot(&mut vm).await?;
         info!(backend = %backend.label(), "VM running — Ctrl-C to shut down");
-        // We don't install a signal handler in this PR; rely on the
-        // child receiving SIGINT via the foreground process group when
-        // the user Ctrl-Cs us. Signal-driven graceful shutdown via
-        // tokio::signal lands as a follow-up (the abstraction is ready;
-        // the wiring is just orthogonal to this scope).
-        let exit = runner.wait(&mut vm).await?;
-        Ok::<i32, CliRunError>(exit.unwrap_or(0))
+
+        // Ctrl-C must run the same teardown a normal exit does. Relying on
+        // the child catching SIGINT through the foreground process group is
+        // not enough: this process dies with it, so the `_vmnet` guard never
+        // drops and the per-VM netns, tap and nft DNAT rules leak. Leaked
+        // DNAT is the worst of those — host ports stay redirected at a
+        // namespace with nothing behind it.
+        //
+        // Both branches borrow `vm`, so the interrupt branch only *reports*
+        // the interrupt; the shutdown happens after the select has released
+        // the borrow.
+        let interrupted = tokio::select! {
+            res = runner.wait(&mut vm) => {
+                exit_code = res?;
+                false
+            }
+            _ = tokio::signal::ctrl_c() => true,
+        };
+        if interrupted {
+            info!("interrupt received — shutting the VM down");
+            // `graceful` escalates inside the backend (ACPI powerdown, then a
+            // bounded wait, then a hard stop), so there is no timeout to
+            // duplicate here.
+            runner.shutdown(&mut vm, true).await?;
+            exit_code = runner.wait(&mut vm).await?;
+        }
+        Ok::<i32, CliRunError>(exit_code.unwrap_or(0))
     });
     match result {
         Ok(code) => {
