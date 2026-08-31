@@ -59,7 +59,9 @@ A rootless (non-root) `umf build` runs inside a single user namespace UMF enters
 
 ### Real-kernel boot validation
 
-Real-kernel boot is validated end to end under **QEMU/KVM**: a CI boot-smoke test builds a minimal kernel + busybox image, `umf compile`s it to a GPT/ESP/squashfs UKI disk, and boots it to a userspace marker on the serial console. Bare-metal-specific hardware is not separately tested in CI; the projected UEFI disk is byte-identical whether it boots under a VMM or on hardware, so the QEMU/KVM validation exercises the same boot contract.
+Real-kernel boot is validated end to end under **QEMU/KVM**: a CI boot-smoke test builds a minimal kernel + busybox image, `umf compile`s it to a GPT/ESP/squashfs UKI disk, and boots it to a userspace marker on the serial console. The projected UEFI disk is byte-identical whether it boots under a VMM or on hardware, so that validation exercises the same *disk* contract.
+
+What it does **not** exercise is hardware the VM does not present. The generated initramfs (init-system images only — appliance images have none) resolves its root device from the kernel command line, honouring the `root=PARTLABEL=ROOTFS` the projector writes, and embeds drivers for virtio, NVMe, AHCI/SATA, eMMC/SD and USB storage when the kernel ships them as modules. Only the virtio path is covered by CI, so the others rest on the driver being present in your kernel and on `findfs` being available in the userland's busybox. If an init-system image stops in the initramfs, it prints the block devices it could see before dropping to a shell — start there.
 
 ## VM runtime (`umf run`)
 
