@@ -95,9 +95,16 @@ fn init_script_references_modules_and_squashfs_mount() {
     let mut decompressed = Vec::new();
     decoder.read_to_end(&mut decompressed).expect("gunzip");
     let text = String::from_utf8_lossy(&decompressed);
+    // Modules are listed in `UMF_MODS` and loaded by a retry loop rather than
+    // one `insmod` line each, so assert the same intent against that shape:
+    // the paths are referenced, and something loads them.
     assert!(
-        text.contains("insmod /lib/modules/6.6.79/"),
-        "init missing insmod lines"
+        text.contains("/lib/modules/6.6.79/"),
+        "init does not reference the embedded modules"
+    );
+    assert!(
+        text.contains("insmod \"$_m\""),
+        "init does not load the embedded modules"
     );
     assert!(
         text.contains("mount -t squashfs"),
@@ -106,5 +113,157 @@ fn init_script_references_modules_and_squashfs_mount() {
     assert!(
         text.contains("switch_root /sysroot"),
         "init missing switch_root"
+    );
+}
+
+#[test]
+fn boot_init_honours_root_from_the_kernel_cmdline() {
+    // `umf compile` writes `root=PARTLABEL=ROOTFS` precisely so one disk boots
+    // wherever the root device enumerates differently. The initramfs used to
+    // ignore it and hardcode /dev/vda2 with an /dev/sda2 fallback, which is
+    // why an init-system image could not boot from NVMe.
+    let release = "6.6.79";
+    let staging = seed_busybox_shaped_staging(release);
+    let kernel = synthetic_kernel_layout(staging.path(), release);
+    let (bytes, _) = generate_initramfs(&staging, &kernel).expect("generate");
+
+    use flate2::read::GzDecoder;
+    use std::io::Read as _;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).expect("gunzip");
+    let text = String::from_utf8_lossy(&decompressed);
+
+    assert!(
+        text.contains("/proc/cmdline"),
+        "init must read the kernel cmdline",
+    );
+    assert!(
+        text.contains("root=*) ROOT=\"${_arg#root=}\""),
+        "init must extract root= from the cmdline",
+    );
+    assert!(
+        text.contains("findfs"),
+        "init must resolve PARTLABEL=/PARTUUID=/UUID= forms via findfs",
+    );
+    // The historical probe survives as a fallback, now including NVMe and MMC.
+    for node in ["/dev/vda2", "/dev/sda2", "/dev/nvme0n1p2", "/dev/mmcblk0p2"] {
+        assert!(
+            text.contains(node),
+            "fallback probe should still consider {node}",
+        );
+    }
+    // And a total failure says so rather than hanging on a mount error.
+    assert!(
+        text.contains("no root device found"),
+        "init should diagnose an unresolvable root device",
+    );
+}
+
+#[test]
+fn boot_initramfs_carries_non_virtio_storage_drivers() {
+    // Even with the cmdline honoured, a root device needs a driver in the
+    // initramfs. The allowlist was virtio-only, so NVMe hardware had nothing
+    // to bind the disk with.
+    let release = "6.6.79";
+    let staging = seed_busybox_shaped_staging(release);
+    let modules_root = staging.path().join("lib/modules").join(release);
+    // Seed a few driver-shaped module files the allowlist should now pick up.
+    let kernel_dir = modules_root.join("kernel/drivers/nvme/host");
+    std::fs::create_dir_all(&kernel_dir).expect("mkdir");
+    for m in ["nvme.ko", "nvme_core.ko"] {
+        std::fs::write(kernel_dir.join(m), b"\x7fELF-ish").expect("write module");
+    }
+    let ata_dir = modules_root.join("kernel/drivers/ata");
+    std::fs::create_dir_all(&ata_dir).expect("mkdir");
+    std::fs::write(ata_dir.join("ahci.ko"), b"\x7fELF-ish").expect("write module");
+
+    let kernel = synthetic_kernel_layout(staging.path(), release);
+    let (bytes, report) = generate_initramfs(&staging, &kernel).expect("generate");
+
+    use flate2::read::GzDecoder;
+    use std::io::Read as _;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).expect("gunzip");
+    let text = String::from_utf8_lossy(&decompressed);
+
+    for driver in ["nvme", "nvme_core", "ahci"] {
+        assert!(
+            text.contains(&format!("{driver}.ko")),
+            "{driver} should be embedded for bare-metal boot; report={report:?}",
+        );
+    }
+}
+
+#[test]
+fn module_loading_retries_so_dependency_order_does_not_matter() {
+    // Modules are collected in path order, not dependency order (nvme needs
+    // nvme_core, ahci needs libahci), and `insmod` of a module whose
+    // dependency is not yet loaded fails. Repeated passes make the ordering
+    // irrelevant instead of relying on the walk happening to be correct.
+    let release = "6.6.79";
+    let staging = seed_busybox_shaped_staging(release);
+    let kernel = synthetic_kernel_layout(staging.path(), release);
+    let (bytes, _) = generate_initramfs(&staging, &kernel).expect("generate");
+
+    use flate2::read::GzDecoder;
+    use std::io::Read as _;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).expect("gunzip");
+    let text = String::from_utf8_lossy(&decompressed);
+
+    assert!(
+        text.contains("for _pass in"),
+        "module loading should retry across passes",
+    );
+    assert!(
+        text.contains("_loaded=1"),
+        "the retry loop should track whether a pass made progress",
+    );
+}
+
+#[test]
+fn the_generated_boot_init_is_valid_shell() {
+    // This script is generated, never reviewed as a file, and only ever runs
+    // at boot — where a syntax error is an unbootable image with a message
+    // nobody sees. `sh -n` parses without executing, so the guard is cheap
+    // and catches exactly that class of mistake.
+    let release = "6.6.79";
+    let staging = seed_busybox_shaped_staging(release);
+    let kernel = synthetic_kernel_layout(staging.path(), release);
+    let (bytes, _) = generate_initramfs(&staging, &kernel).expect("generate");
+
+    use flate2::read::GzDecoder;
+    use std::io::Read as _;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).expect("gunzip");
+    let text = String::from_utf8_lossy(&decompressed);
+
+    // The cpio payload embeds the script verbatim; slice it out by its
+    // shebang and its final line.
+    let start = text.find("#!/bin/sh").expect("init script present");
+    let end_marker = "exec switch_root /sysroot /sbin/init\n";
+    let end = text[start..]
+        .find(end_marker)
+        .map(|i| start + i + end_marker.len())
+        .expect("init script terminator present");
+    let script = &text[start..end];
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("init");
+    std::fs::write(&path, script.as_bytes()).expect("write script");
+
+    let out = std::process::Command::new("sh")
+        .arg("-n")
+        .arg(&path)
+        .output()
+        .expect("run sh -n");
+    assert!(
+        out.status.success(),
+        "generated init is not valid shell:\n{}\n--- script ---\n{script}",
+        String::from_utf8_lossy(&out.stderr),
     );
 }

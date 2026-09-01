@@ -1,0 +1,36 @@
+---
+fixes:
+  - |
+    Init-system bootable images can now boot from hardware that is not
+    virtio. The generated initramfs hardcoded ``ROOT=/dev/vda2`` with an
+    ``/dev/sda2`` fallback and never read the kernel command line — so on
+    NVMe, eMMC/SD or USB storage it stopped in the initramfs, unable to find
+    a root device. Since NVMe is the default root device on essentially all
+    modern server and laptop hardware, "boots on bare metal" was not true
+    for this shape.
+    The initramfs now resolves its root device from ``/proc/cmdline``,
+    honouring the ``root=PARTLABEL=ROOTFS`` that ``umf compile`` already
+    wrote for exactly this purpose (and resolving ``PARTUUID=`` / ``UUID=`` /
+    ``LABEL=`` forms through ``findfs``). The historical node probe survives
+    as a fallback and now also considers ``/dev/nvme0n1p2`` and
+    ``/dev/mmcblk0p2``. When nothing resolves, it reports the block devices
+    it could see before dropping to a shell, rather than failing at ``mount``
+    with no context.
+    Appliance images are unaffected: they have no initramfs and the kernel
+    already consumed ``root=`` directly, which is why only the init-system
+    shape was broken.
+  - |
+    The boot initramfs now embeds storage drivers beyond virtio — NVMe,
+    AHCI/SATA, SCSI disk, eMMC/SD and USB mass storage — when the kernel
+    ships them as modules. Honouring ``root=`` is not enough on its own if
+    nothing in the initramfs can bind the disk. Drivers absent from a given
+    kernel (compiled in, or not built) are simply not embedded, so the
+    addition costs nothing where it is unused.
+  - |
+    Embedded modules are now loaded in repeated passes until a pass loads
+    nothing new. They are collected in filesystem path order rather than
+    dependency order, and ``insmod`` of a module whose dependency is not yet
+    loaded fails silently — so ``nvme`` before ``nvme_core``, or ``ahci``
+    before ``libahci``, would previously have been lost. Retrying makes the
+    collection order irrelevant instead of relying on it happening to be
+    correct.

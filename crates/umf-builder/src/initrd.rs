@@ -277,12 +277,46 @@ fn collect_modules_for(
     flavor: &InitramfsFlavor,
 ) -> Result<Vec<PathBuf>, InitrdError> {
     let allowlist: &[&str] = match flavor {
+        // Boot: whatever might carry the root filesystem. virtio covers VMs;
+        // the rest are what real hardware presents. A name absent from the
+        // kernel's module tree (compiled-in, or not built) simply is not
+        // found here, and `insmod` tolerates a missing file, so listing a
+        // driver costs nothing when it is unused.
         InitramfsFlavor::Boot => &[
+            // virtio (VM).
             "virtio",
             "virtio_ring",
             "virtio_pci",
             "virtio_pci_modern_dev",
             "virtio_blk",
+            "virtio_scsi",
+            // NVMe — the default root device on essentially all modern
+            // server and laptop hardware.
+            "nvme_core",
+            "nvme",
+            // SATA / AHCI.
+            "libata",
+            "libahci",
+            "ahci",
+            "ata_piix",
+            "ata_generic",
+            // SCSI disk plumbing the above hang off.
+            "scsi_mod",
+            "sd_mod",
+            // eMMC / SD (SBCs and appliance hardware).
+            "mmc_core",
+            "mmc_block",
+            "sdhci",
+            "sdhci_pci",
+            "sdhci_acpi",
+            // USB mass storage (installer / recovery media).
+            "usb_common",
+            "usbcore",
+            "ehci_hcd",
+            "ehci_pci",
+            "xhci_hcd",
+            "xhci_pci",
+            "usb_storage",
             umf_core::boot::ROOTFS_FSTYPE,
         ],
         InitramfsFlavor::Run => &[
@@ -348,21 +382,61 @@ fn build_boot_init_script(release: &str, modules: &[PathBuf], modules_root: &Pat
     s.push_str("mount -t devtmpfs devtmpfs /dev\n");
     s.push('\n');
     s.push_str("# Bring up the kernel modules we need to see the rootfs disk.\n");
-    s.push_str("# `insmod` ignores missing files so a kernel that has these\n");
-    s.push_str("# compiled-in (no .ko present) still boots.\n");
+    s.push_str("# Modules are embedded in path order, which is not dependency\n");
+    s.push_str("# order, so load in repeated passes until a pass loads nothing\n");
+    s.push_str("# new — a module whose dependency came later then still lands.\n");
+    s.push_str("# A missing file or an already-loaded module is not an error.\n");
+    s.push_str("UMF_MODS=\"\\\n");
     for m in modules {
         let rel = m.strip_prefix(modules_root).unwrap_or(m);
         let in_initrd = PathBuf::from("/lib/modules").join(release).join(rel);
-        s.push_str(&format!(
-            "insmod {} 2>/dev/null || true\n",
-            in_initrd.display()
-        ));
+        s.push_str(&format!("{} \\\n", in_initrd.display()));
     }
+    s.push_str("\"\n");
+    s.push_str("for _pass in 1 2 3 4; do\n");
+    s.push_str("    _loaded=0\n");
+    s.push_str("    for _m in $UMF_MODS; do\n");
+    s.push_str("        [ -f \"$_m\" ] || continue\n");
+    s.push_str("        insmod \"$_m\" 2>/dev/null && _loaded=1\n");
+    s.push_str("    done\n");
+    s.push_str("    [ \"$_loaded\" -eq 0 ] && break\n");
+    s.push_str("done\n");
     s.push('\n');
-    s.push_str("# Mount the squashfs rootfs (the second partition of the disk).\n");
-    s.push_str("# `vda` for virtio-blk; `sda` if running on plain IDE/AHCI.\n");
-    s.push_str("ROOT=/dev/vda2\n");
-    s.push_str("[ -b /dev/sda2 ] && ROOT=/dev/sda2\n");
+    s.push_str("# Resolve the root device. `umf compile` writes\n");
+    s.push_str("# `root=PARTLABEL=ROOTFS` into the cmdline precisely so the same\n");
+    s.push_str("# disk boots wherever the root device enumerates differently\n");
+    s.push_str("# (virtio /dev/vda, NVMe /dev/nvme0n1p2, SATA /dev/sda2), so\n");
+    s.push_str("# honour it rather than guessing a node name.\n");
+    s.push_str("ROOT=\"\"\n");
+    s.push_str("for _arg in $(cat /proc/cmdline 2>/dev/null); do\n");
+    s.push_str("    case \"$_arg\" in root=*) ROOT=\"${_arg#root=}\" ;; esac\n");
+    s.push_str("done\n");
+    s.push_str("case \"$ROOT\" in\n");
+    s.push_str("    \"\"|/dev/*) ;;\n");
+    s.push_str("    *=*)\n");
+    s.push_str("        # PARTLABEL= / PARTUUID= / UUID= / LABEL= — ask findfs.\n");
+    s.push_str("        _resolved=$(findfs \"$ROOT\" 2>/dev/null || true)\n");
+    s.push_str("        ROOT=\"$_resolved\"\n");
+    s.push_str("        ;;\n");
+    s.push_str("esac\n");
+    s.push('\n');
+    s.push_str("# Fall back to probing the usual second partitions when the\n");
+    s.push_str("# cmdline carried nothing usable (an older disk, or a busybox\n");
+    s.push_str("# without findfs).\n");
+    s.push_str("if [ -z \"$ROOT\" ] || [ ! -b \"$ROOT\" ]; then\n");
+    s.push_str("    for _c in /dev/vda2 /dev/sda2 /dev/nvme0n1p2 /dev/mmcblk0p2; do\n");
+    s.push_str("        [ -b \"$_c\" ] && ROOT=\"$_c\" && break\n");
+    s.push_str("    done\n");
+    s.push_str("fi\n");
+    s.push('\n');
+    s.push_str("if [ -z \"$ROOT\" ] || [ ! -b \"$ROOT\" ]; then\n");
+    s.push_str("    echo \"umf-initramfs: no root device found (cmdline root=, then \\\n");
+    s.push_str("vda2/sda2/nvme0n1p2/mmcblk0p2)\" >&2\n");
+    s.push_str("    echo \"umf-initramfs: available block devices:\" >&2\n");
+    s.push_str("    ls /sys/class/block 2>/dev/null >&2 || true\n");
+    s.push_str("    exec sh\n");
+    s.push_str("fi\n");
+    s.push('\n');
     s.push_str(&format!(
         "mount -t {} -o ro \"$ROOT\" /sysroot\n",
         umf_core::boot::ROOTFS_FSTYPE,
