@@ -11,7 +11,7 @@ This repository hosts two things, tightly coupled:
 
 The spec is normative; the implementation is canonical. Both live in the same git history so that spec changes and the implementation that matches them ship together. They version independently: the spec is at v0.0.1, the binary at v0.0.1.
 
-- **Status**: spec v0.0.1 (draft); reference implementation v0.0.1 — container target feature-complete (build / run / registry / OCI archives, all in-process). The unified **bootable** path is two steps: `umf build` emits an OCI image (`org.imagilux.umf.type=bootable`) and `umf compile` projects that image to a VM or bare-metal disk image (classic systemd-boot or UKI), with init-system or appliance (binary-`ENTRYPOINT`) PID 1. Container vs bootable is inferred purely from what `FROM` resolves to (see Design pillars); the boot chain has no dedicated directives. Real-kernel boot is validated end to end in CI: the boot-smoke lane builds a minimal kernel + busybox image, `umf compile`s it, and boots it under QEMU/KVM to a userspace marker. See `docs/known-limitations.md` for the remaining not-yet-supported paths.
+- **Status**: spec v0.0.1 (draft); reference implementation v0.0.1 — container target feature-complete (build / run / registry / OCI archives, all in-process). The unified **bootable** path is two steps: `umf build` emits an OCI image (`org.imagilux.umf.type=bootable`) and `umf compile` projects that image to a VM or bare-metal disk image (classic systemd-boot or UKI), with init-system or appliance (binary-`ENTRYPOINT`) PID 1. Container vs bootable is inferred purely from what `FROM` resolves to (see Design pillars); the boot chain has no dedicated directives. Real-kernel boot is validated end to end in CI: the boot-smoke lane builds a minimal kernel + busybox image, `umf compile`s it, and boots it under QEMU/KVM to a userspace marker. The privileged lane sets `UMF_REQUIRE_PRIVILEGED=1`, which turns a root-gated test's self-skip into a failure so the lane cannot silently degrade to running nothing. See `docs/known-limitations.md` for the remaining not-yet-supported paths.
 - **Author**: Gaël THEROND / Imagilux
 
 ## Naming
@@ -159,10 +159,13 @@ umf/
 ├── .gitignore
 ├── .github/
 │   └── workflows/
-│       ├── rust.yml             # CI — build / test / clippy / fmt on push + PR to main
+│       ├── rust.yml             # CI — fmt / clippy / test on push + PR to main, on x86_64 AND aarch64
 │       ├── boot-smoke.yml       # CI — real-kernel boot-smoke: build → compile → QEMU/KVM boot → assert userspace
 │       ├── oci-conformance.yml  # CI — OCI image-spec conformance gate (JSON schema + skopeo/crane)
-│       ├── privileged.yml       # CI — privileged lane: rootful libcontainer RUN, NAT egress, VM boot
+│       ├── privileged.yml       # CI — privileged lane: rootful libcontainer RUN, NAT egress, VmNet plumbing, build→run acceptance
+│       ├── rootless.yml         # CI — rootless lane: userns build + delegated cgroups
+│       ├── audit.yml            # CI — weekly `cargo deny check advisories` (scheduled + dispatch)
+│       ├── release-validate.yml # CI — PR/main cross-build of the release targets (musl via Cross.toml)
 │       ├── release.yml          # binary GitHub Release on `vX.Y.Z` tags
 │       └── deploy-docs.yml      # MkDocs publish on `spec-vX.Y[.Z]` tags
 └── .claude/

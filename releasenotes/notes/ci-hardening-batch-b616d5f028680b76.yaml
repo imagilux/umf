@@ -1,0 +1,83 @@
+---
+security:
+  - |
+    The musl release builds now verify the libseccomp source tarball against a
+    pinned SHA-256 before unpacking it. Both musl targets previously piped an
+    unauthenticated ``curl`` straight into ``tar``, and the result is
+    *statically linked* into every published musl binary — so a substituted
+    tarball would not merely break a build, it would ship as a silently
+    weakened sandbox in the artifact users download, since libseccomp is what
+    applies the default-deny seccomp profile to every ``RUN`` step. A digest
+    mismatch now aborts the build. Bumping the pinned version requires bumping
+    the digest alongside it, which also makes the change visible in review.
+fixes:
+  - |
+    The ``VmNet`` integration smoke (network namespace, veth pair, tap device
+    and nftables DNAT) now checks for interfaces inside the namespace through
+    ``/proc/thread-self/net/dev`` instead of ``/sys/class/net``. sysfs filters
+    its network directory by the namespace its superblock was mounted in,
+    captured at mount time, so a bare ``setns`` leaves an already-mounted
+    ``/sys`` reporting the *host's* interfaces forever — which is why ``ip
+    netns exec`` remounts it. The test was therefore asserting against the
+    wrong namespace and failed whenever it was actually run; the plumbing it
+    tests was correct all along. It now also asserts that the bridge and the
+    guest-side veth are in the namespace and that the host-side veth is not.
+  - |
+    Two integration tests that never ran their assertions in any CI lane are
+    now exercised by the privileged lane: the ``VmNet`` smoke above, and the
+    single end-to-end ``umf build`` → ``umf run`` acceptance test in
+    ``tests/cli.rs``. The unprivileged lane does select both targets, but
+    each self-skips without root, and neither appeared in the privileged
+    lane's target list — so both reported green while asserting nothing,
+    anywhere.
+  - |
+    Root-gated smoke tests now fail instead of skipping when
+    ``UMF_REQUIRE_PRIVILEGED=1`` is set, and the privileged CI lane sets it. A
+    lane that quietly loses its prerequisites and reports green is worse than
+    no lane at all — that is precisely how the broken ``VmNet`` smoke stayed
+    invisible. The guard covers the *capability* gate of every smoke that lane
+    runs (root, ``/dev/net/tun``, ``UMF_ENGINE_SMOKE``). An environmental
+    registry failure still skips: that lane deliberately tolerates a
+    rate-limited or unreachable registry, and failing on it would trade one
+    kind of bad signal for another.
+  - |
+    The end-to-end ``umf build`` → ``umf run`` acceptance test now honours
+    ``UMF_SMOKE_BASE_IMAGE`` and treats registry rate limits, DNS failures and
+    refused connections as a skip rather than a failure, matching the engine
+    and builder smokes. Without this, wiring it into CI would have made the
+    lane flaky on Docker Hub's anonymous pull limit.
+  - |
+    ``release-validate.yml`` now runs on changes under ``src/`` and
+    ``crates/``. Its path filter listed only the release *configuration*
+    files, so the lane that exists to catch cross-compilation breakage never
+    fired on source changes — the dominant cause of it. An unfiltered ``push``
+    trigger on ``main`` was added as a backstop, since a path filter is
+    fragile by construction and the next cross-build-relevant file has to be
+    remembered and added.
+other:
+  - |
+    A weekly scheduled ``Advisory audit`` lane re-evaluates the RustSec
+    advisory database against the committed ``Cargo.lock``. The advisory
+    database is fetched fresh on every run, so a newly-published advisory
+    makes an unchanged ``main`` vulnerable retroactively — the previous run's
+    green is stale the moment upstream publishes, and nobody learns this until
+    someone happens to push. On failure the lane opens (or comments on) a
+    tracking issue rather than relying on GitHub's email to the last
+    committer. It complements the push-time gate rather than replacing it:
+    GitHub disables scheduled triggers after 60 days of repository inactivity.
+  - |
+    The Rust CI workflow now runs clippy and the test suite on an aarch64
+    runner in addition to x86_64. UMF ships aarch64 binaries and carries
+    genuinely architecture-dependent logic — host-architecture detection, the
+    QEMU binary and firmware-discovery branches (the aarch64 firmware path is
+    structurally different: pflash only, no ``-bios`` form), the cross-arch
+    UKI rejection, and the ESP layout — none of which had ever been
+    *executed* on the architecture it targets. The release workflow
+    cross-builds aarch64 but runs no tests.
+  - |
+    Two unit tests that asserted x86_64-specific output derived from the
+    *compile-time host* architecture are now architecture-relative: the
+    ``umf doctor`` CLI test expected the literal ``qemu-system-x86_64`` where
+    the command prints ``Architecture::host().qemu_binary_name()``, and the
+    QEMU ``-enable-kvm`` test relied on ``VmArch::host()`` for a flag that is
+    deliberately x86-only. Both would have failed on the new aarch64 lane.
