@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tempfile::TempDir;
 use tracing::{info, warn};
 use umf_core::architecture::Architecture;
+use umf_core::boot::RootfsFs;
 use umf_core::l0::L0Kind;
 use umf_core::label;
 use umf_oci::materialize::materialize_layers;
@@ -29,6 +30,8 @@ pub struct CompileReport {
     pub entrypoint: String,
     /// Boot-packaging flavor applied (`systemd-boot` / `uki`).
     pub flavor: String,
+    /// Root filesystem written into the ROOTFS partition.
+    pub rootfs_fs: RootfsFs,
 }
 
 /// Project the bootable-OS image `reference` (resident in `layout`) into a disk
@@ -37,12 +40,17 @@ pub struct CompileReport {
 ///
 /// `bootloader_override` supplies an explicit bootloader `.efi`; when `None` and
 /// the manifest names a classic bootloader, the host install is probed.
+///
+/// `rootfs_fs_override` is `umf compile --fs`. When `None` the image's
+/// `rootfs.fs` label is used, and failing that squashfs — see
+/// [`resolve_rootfs_fs`] for why the precedence runs that way.
 pub fn compile_image(
     layout: &ImageLayout,
     reference: &str,
     out: &Path,
     geometry: DiskGeometry,
     bootloader_override: Option<&Path>,
+    rootfs_fs_override: Option<RootfsFs>,
 ) -> Result<CompileReport, CompileError> {
     let entry = layout
         .lookup_ref(reference)?
@@ -104,22 +112,7 @@ pub fn compile_image(
         .map(String::as_str)
         .unwrap_or("");
 
-    // The projector only writes a squashfs ROOTFS partition (see
-    // `filesystem::write_squashfs_from_dir`). An image declaring any other
-    // `rootfs.fs` would otherwise silently compile to squashfs — and boot with
-    // a cmdline claiming `rootfstype=squashfs` regardless — so reject it rather
-    // than misrepresent the filesystem. Absent ⇒ squashfs (the historical
-    // default, kept for images emitted before the label was read).
-    if let Some(rootfs_fs) = labels.get(label::ROOTFS_FS) {
-        if rootfs_fs != "squashfs" {
-            return Err(CompileError::Io(std::io::Error::other(format!(
-                "boot-manifest label `{}` is `{rootfs_fs}`, but the projector only writes a \
-                 squashfs ROOTFS partition (ext4 / erofs are not implemented); rebuild with \
-                 the default squashfs rootfs",
-                label::ROOTFS_FS,
-            ))));
-        }
-    }
+    let rootfs_fs = resolve_rootfs_fs(rootfs_fs_override, labels.get(label::ROOTFS_FS))?;
 
     // `kernel_release` and `extra_cmdline` are interpolated into the loader
     // entry / UKI cmdline; a newline would inject extra bootloader directives.
@@ -193,6 +186,7 @@ pub fn compile_image(
             initrd,
             architecture,
             extra_cmdline,
+            rootfs_fs,
         },
     )?;
 
@@ -201,7 +195,52 @@ pub fn compile_image(
         projection,
         entrypoint: entrypoint.to_string(),
         flavor: flavor.to_string(),
+        rootfs_fs,
     })
+}
+
+/// Decide which filesystem the ROOTFS partition gets: the `--fs` flag, else
+/// the image's `rootfs.fs` label, else squashfs.
+///
+/// The flag wins because the filesystem is a property of the *disk being
+/// projected*, not of the image — the layers are byte-identical either way, so
+/// the same bootable image projects to squashfs on one node and ext4 on
+/// another. The label is the build's recorded default rather than a
+/// constraint, which is what lets images built before `--fs` existed keep
+/// projecting exactly as they did.
+///
+/// An unrecognised label is an **error**, not a silent fall back to the
+/// default: the label is the only statement the image makes about its root
+/// filesystem, and quietly writing squashfs under a cmdline the operator did
+/// not ask for is the failure mode this whole path exists to avoid. A bad
+/// `--fs` value never reaches here — clap rejects it at parse time.
+fn resolve_rootfs_fs(
+    override_fs: Option<RootfsFs>,
+    label_value: Option<&String>,
+) -> Result<RootfsFs, CompileError> {
+    if let Some(fs) = override_fs {
+        if let Some(declared) = label_value.and_then(|v| RootfsFs::from_token(v)) {
+            if declared != fs {
+                // Not an error — the override is the point — but the operator
+                // should see that the disk differs from what the build recorded.
+                info!(
+                    requested = %fs,
+                    image_default = %declared,
+                    "projecting with a root filesystem other than the image's default",
+                );
+            }
+        }
+        return Ok(fs);
+    }
+    match label_value {
+        None => Ok(RootfsFs::default()),
+        Some(value) => {
+            RootfsFs::from_token(value).ok_or_else(|| CompileError::UnsupportedRootfsFs {
+                value: value.clone(),
+                supported: RootfsFs::supported_tokens(),
+            })
+        }
+    }
 }
 
 fn require_label<'a>(

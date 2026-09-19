@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use umf_core::boot::RootfsFs;
 
 mod archive;
 mod attest;
@@ -210,6 +211,16 @@ enum Command {
         /// EFI System Partition size in bytes. Default 500 MiB (per spec).
         #[arg(long, value_name = "BYTES")]
         esp_size: Option<u64>,
+        /// Root filesystem to write into the ROOTFS partition.
+        ///
+        /// The filesystem is a property of the disk, not of the image — the
+        /// same bootable image projects to any of these. Defaults to the
+        /// image's `org.imagilux.umf.rootfs.fs` label, and then to `squashfs`,
+        /// the only one written in-process; `ext4` needs `mkfs.ext4`
+        /// (e2fsprogs) and `erofs` needs `mkfs.erofs` (erofs-utils) on the
+        /// host, with no fallback.
+        #[arg(long = "fs", value_name = "FS", value_parser = parse_rootfs_fs)]
+        rootfs_fs: Option<RootfsFs>,
     },
     /// Execute a previously-built image.
     ///
@@ -899,6 +910,22 @@ enum SbomAction {
 /// The first line is deliberately unchanged (`error: <display>`), so existing
 /// expectations and any log scraping still match; causes follow on indented
 /// continuation lines.
+/// clap `value_parser` for `umf compile --fs`.
+///
+/// Hand-written rather than derived: `RootfsFs` lives in `umf-core`, which by
+/// design depends on nothing, so it cannot implement clap's `ValueEnum`. The
+/// accepted set and the rejection message both come from the type, so the
+/// list is never written out twice and can never drift from what the
+/// projector actually supports.
+fn parse_rootfs_fs(value: &str) -> Result<RootfsFs, String> {
+    RootfsFs::from_token(value).ok_or_else(|| {
+        format!(
+            "unsupported root filesystem `{value}` (supported: {})",
+            RootfsFs::supported_tokens(),
+        )
+    })
+}
+
 fn render_error_chain(err: &dyn std::error::Error) -> String {
     let mut rendered = format!("error: {err}");
     let mut source = err.source();
@@ -1045,11 +1072,13 @@ pub fn run() -> ExitCode {
             output,
             disk_size,
             esp_size,
+            rootfs_fs,
         } => finish(compile::run_compile(compile::CompileArgs {
             reference: &reference,
             output: output.as_deref(),
             disk_size,
             esp_size,
+            rootfs_fs,
             layout_dir_override,
         })),
         Command::Run {

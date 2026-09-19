@@ -83,7 +83,7 @@ fn produces_valid_gzip_cpio() {
 }
 
 #[test]
-fn init_script_references_modules_and_squashfs_mount() {
+fn init_script_references_modules_and_mounts_the_root() {
     let release = "6.6.79";
     let staging = seed_busybox_shaped_staging(release);
     let kernel = synthetic_kernel_layout(staging.path(), release);
@@ -107,13 +107,69 @@ fn init_script_references_modules_and_squashfs_mount() {
         "init does not load the embedded modules"
     );
     assert!(
-        text.contains("mount -t squashfs"),
-        "init missing squashfs mount"
+        text.contains("/sysroot"),
+        "init does not mount the root onto /sysroot"
     );
     assert!(
         text.contains("switch_root /sysroot"),
         "init missing switch_root"
     );
+}
+
+/// The root filesystem is chosen at **projection** time by `umf compile --fs`,
+/// long after this initramfs was generated, so the init script must not name
+/// one. It reads `rootfstype=` back from the cmdline the projector wrote —
+/// exactly as it already reads `root=` for the device.
+///
+/// Baking a type in here instead is what made one built image projectable to
+/// only one filesystem: `umf compile --fs ext4` would have produced a disk of
+/// ext4 bytes whose initramfs still ran `mount -t squashfs`, and it would not
+/// boot.
+#[test]
+fn boot_init_takes_the_root_filesystem_from_the_cmdline() {
+    let script = build_boot_init_script("7.0.0-umf", &[], Path::new("/lib/modules"));
+
+    assert!(
+        script.contains("rootfstype="),
+        "init must read rootfstype= from the cmdline: {script}",
+    );
+    assert!(
+        script.contains("mount -t \"$ROOTFSTYPE\""),
+        "init must mount with the type it read, not a literal: {script}",
+    );
+    // No hardcoded filesystem anywhere in the mount path.
+    for fs in umf_core::boot::RootfsFs::ALL {
+        assert!(
+            !script.contains(&format!("mount -t {fs}")),
+            "init must not hardcode `mount -t {fs}`: {script}",
+        );
+    }
+    // And a cmdline that carried no rootfstype= must still mount, by letting
+    // the kernel try every filesystem the modules registered.
+    assert!(
+        script.contains("mount -o ro \"$ROOT\" /sysroot"),
+        "init needs a no-type fallback mount: {script}",
+    );
+}
+
+/// The initramfs cannot know which filesystem the disk will be projected
+/// with, so it carries the driver for every one `umf compile --fs` accepts.
+/// A missing module here is an unbootable disk for that filesystem, and the
+/// failure is a kernel panic at switch_root rather than anything this crate
+/// would catch.
+#[test]
+fn boot_initramfs_carries_a_driver_for_every_projectable_filesystem() {
+    let script = build_boot_init_script("7.0.0-umf", &[], Path::new("/lib/modules"));
+    // The module set is embedded in the script's `UMF_MODS` list via the
+    // allowlist; assert the allowlist itself names each filesystem.
+    let allow = super::modules_allowlist_for_test(&InitramfsFlavor::Boot);
+    for fs in umf_core::boot::RootfsFs::ALL {
+        assert!(
+            allow.contains(&fs.as_str()),
+            "boot initramfs must carry the {fs} driver; allowlist: {allow:?}",
+        );
+    }
+    let _ = script;
 }
 
 #[test]

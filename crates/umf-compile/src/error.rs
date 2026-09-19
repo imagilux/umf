@@ -123,6 +123,22 @@ pub enum CompileError {
     #[error("oci layout: {0}")]
     Oci(#[from] umf_oci::registry::RegistryError),
 
+    /// The image's `rootfs.fs` label names a filesystem UMF cannot write.
+    /// Rejected rather than defaulted: the label is the image's only
+    /// statement about its root filesystem, and silently substituting another
+    /// would produce a disk the operator did not ask for.
+    #[error(
+        "boot-manifest label `org.imagilux.umf.rootfs.fs` is `{value}`, which is not a \
+         filesystem `umf compile` can write (supported: {supported}); override it with \
+         `umf compile --fs <fs>`"
+    )]
+    UnsupportedRootfsFs {
+        /// The unrecognised label value.
+        value: String,
+        /// Comma-separated list of what is supported.
+        supported: String,
+    },
+
     /// ROOTFS partition (squashfs) emit error.
     #[error("rootfs filesystem: {0}")]
     Filesystem(#[from] FilesystemError),

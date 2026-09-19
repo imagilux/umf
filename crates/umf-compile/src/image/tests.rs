@@ -6,7 +6,7 @@ use super::*;
 use crate::partition::PartitionView;
 use fatfs::{FileSystem, FsOptions};
 use std::fs::OpenOptions;
-use std::io::Read;
+use std::io::{Read, Seek};
 use tempfile::tempdir;
 use umf_oci::image::{ContainerConfig, ImageConfig, LayerSource, emit_image};
 
@@ -72,8 +72,8 @@ fn compile_image_projects_a_bootable_disk() {
     std::fs::write(&efi, fake_efi()).unwrap();
     let out = dir.path().join("disk.img");
 
-    let report =
-        compile_image(&layout, reference, &out, small_geometry(), Some(&efi)).expect("compile");
+    let report = compile_image(&layout, reference, &out, small_geometry(), Some(&efi), None)
+        .expect("compile");
 
     assert_eq!(report.flavor, "systemd-boot");
     assert_eq!(report.entrypoint, "appliance");
@@ -176,7 +176,7 @@ fn compile_image_rejects_non_bootable() {
     emit_image(&layout, &[], &config, reference).expect("emit");
 
     let out = dir.path().join("disk.img");
-    let err = compile_image(&layout, reference, &out, small_geometry(), None).unwrap_err();
+    let err = compile_image(&layout, reference, &out, small_geometry(), None, None).unwrap_err();
     assert!(
         matches!(err, CompileError::NotBootable { .. }),
         "got {err:?}"
@@ -193,6 +193,7 @@ fn compile_image_missing_reference_is_an_error() {
         "example.invalid/absent:1",
         &out,
         small_geometry(),
+        None,
         None,
     )
     .unwrap_err();
@@ -256,6 +257,7 @@ fn compile_to_tmp(
         &dir.join("disk.img"),
         small_geometry(),
         Some(&efi),
+        None,
     )
 }
 
@@ -342,24 +344,89 @@ fn compile_image_accepts_in_rootfs_vmlinuz() {
     );
 }
 
-/// Regression: an image declaring a non-squashfs `rootfs.fs` must be
-/// rejected — the projector only writes squashfs, and silently compiling
-/// `ext4` to squashfs would misrepresent the on-disk filesystem.
+/// A `rootfs.fs` naming a filesystem UMF cannot write is still rejected —
+/// but by *name*, not by "anything other than squashfs". The label is the
+/// image's only statement about its root filesystem, so quietly substituting
+/// the default would project a disk the operator never asked for, under a
+/// cmdline claiming it was theirs.
 #[test]
-fn compile_image_rejects_non_squashfs_rootfs_fs() {
+fn compile_image_rejects_an_unwritable_rootfs_fs_label() {
     let dir = tempdir().expect("dir");
     let layout = ImageLayout::init(dir.path()).expect("layout");
-    let reference = "example.invalid/ext4-rootfs:1";
-    emit_bootable_custom(&layout, reference, &[(label::ROOTFS_FS, "ext4")]);
+    let reference = "example.invalid/btrfs-rootfs:1";
+    emit_bootable_custom(&layout, reference, &[(label::ROOTFS_FS, "btrfs")]);
     let result = compile_to_tmp(&layout, reference, dir.path());
-    assert!(
-        matches!(result, Err(CompileError::Io(_))),
-        "non-squashfs rootfs.fs must be rejected, got {result:?}"
+    let Err(CompileError::UnsupportedRootfsFs { value, supported }) = result else {
+        panic!("an unwritable rootfs.fs must be rejected, got {result:?}");
+    };
+    assert_eq!(value, "btrfs");
+    for fs in RootfsFs::ALL {
+        assert!(
+            supported.contains(fs.as_str()),
+            "the error should list {fs}: {supported}",
+        );
+    }
+}
+
+// ── Root-filesystem selection ───────────────────────────────────────────────
+
+/// `--fs` beats the label, the label beats the default, and the default is
+/// squashfs.
+///
+/// The precedence runs that way because the filesystem is a property of the
+/// *disk*, not of the image: the layers are byte-identical whichever one is
+/// written, so the same bootable image must be projectable to squashfs on one
+/// node and ext4 on another. The label is the build's recorded default, which
+/// is what keeps images built before `--fs` existed projecting exactly as they
+/// always did.
+#[test]
+fn the_fs_flag_overrides_the_label_which_overrides_the_default() {
+    let squashfs = "squashfs".to_string();
+    let ext4 = "ext4".to_string();
+
+    // No flag, no label ⇒ the in-process default.
+    assert_eq!(
+        resolve_rootfs_fs(None, None).expect("default"),
+        RootfsFs::Squashfs,
+    );
+    // No flag, a label ⇒ the label.
+    assert_eq!(
+        resolve_rootfs_fs(None, Some(&ext4)).expect("label"),
+        RootfsFs::Ext4,
+    );
+    // A flag always wins — including over a label that disagrees, which is
+    // the entire point of the flag.
+    assert_eq!(
+        resolve_rootfs_fs(Some(RootfsFs::Erofs), Some(&squashfs)).expect("override"),
+        RootfsFs::Erofs,
+    );
+    // ...and including over a label naming something unwritable: the operator
+    // has told us exactly what to write, so the image's broken default is
+    // no longer load-bearing.
+    let bogus = "btrfs".to_string();
+    assert_eq!(
+        resolve_rootfs_fs(Some(RootfsFs::Ext4), Some(&bogus)).expect("override wins"),
+        RootfsFs::Ext4,
     );
 }
 
-/// The explicit `rootfs.fs=squashfs` label still compiles (the guard rejects
-/// only the unimplemented filesystems, not the supported one).
+/// Every filesystem is reachable through the flag. A `--fs` value that parsed
+/// but then resolved to something else would produce a disk silently unlike
+/// the one requested.
+#[test]
+fn every_filesystem_is_selectable_through_the_flag() {
+    for fs in RootfsFs::ALL {
+        assert_eq!(
+            resolve_rootfs_fs(Some(fs), None).expect("override"),
+            fs,
+            "--fs {fs} must resolve to {fs}",
+        );
+    }
+}
+
+/// The explicit `rootfs.fs=squashfs` label still compiles, and still picks
+/// squashfs — the historical behaviour, unchanged by making the value set
+/// wider.
 #[test]
 fn compile_image_accepts_explicit_squashfs_rootfs_fs() {
     let dir = tempdir().expect("dir");
@@ -403,4 +470,112 @@ fn compile_image_rejects_vmlinuz_filename_control_chars() {
         matches!(result, Err(CompileError::UnsafeLabelValue { .. })),
         "vmlinuz filename with a control char must be rejected, got {result:?}"
     );
+}
+
+/// End to end, per filesystem: the bytes in the ROOTFS partition and the
+/// `rootfstype=` on the loader entry must name the **same** filesystem.
+///
+/// This is the invariant the whole design rests on. `umf compile` is the
+/// single writer of both, precisely so they cannot disagree — and if they ever
+/// did, the disk would carry one filesystem while telling the kernel (and the
+/// initramfs, which reads `rootfstype=` back) to mount another. Nothing else
+/// in the build would notice: the image is valid, the disk is well-formed, and
+/// it simply fails to boot.
+#[test]
+fn the_partition_bytes_and_the_cmdline_name_the_same_filesystem() {
+    for fs in RootfsFs::ALL {
+        let Some(()) = mkfs_available_or_skip(fs) else {
+            continue;
+        };
+        let dir = tempdir().expect("dir");
+        let layout = ImageLayout::init(dir.path()).expect("layout");
+        let reference = "example.invalid/fs-agreement:1";
+        emit_bootable_custom(&layout, reference, &[]);
+
+        let efi = dir.path().join("fake.efi");
+        std::fs::write(&efi, fake_efi()).unwrap();
+        let out = dir.path().join("disk.img");
+        let report = compile_image(
+            &layout,
+            reference,
+            &out,
+            small_geometry(),
+            Some(&efi),
+            Some(fs),
+        )
+        .unwrap_or_else(|e| panic!("compile with --fs {fs}: {e}"));
+
+        assert_eq!(report.rootfs_fs, fs, "report must name the filesystem used");
+
+        // 1. The ROOTFS partition carries that filesystem's superblock.
+        let disk = std::fs::File::open(&out).expect("open disk");
+        let mut view = PartitionView::new(
+            disk,
+            report.projection.rootfs_start_bytes,
+            report.projection.rootfs_size_bytes,
+            "ROOTFS",
+        );
+        let (offset, magic) = crate::filesystem::tests::superblock_magic(fs);
+        let mut head = vec![0u8; offset + magic.len()];
+        view.seek(std::io::SeekFrom::Start(0)).expect("seek");
+        view.read_exact(&mut head).expect("read rootfs head");
+        assert_eq!(
+            &head[offset..],
+            magic,
+            "--fs {fs} must write a {fs} superblock into the ROOTFS partition",
+        );
+
+        // 2. The loader entry's cmdline names the same one, and no other.
+        let disk = std::fs::File::open(&out).expect("open disk");
+        let esp = PartitionView::new(
+            disk,
+            report.projection.esp_start_bytes,
+            report.projection.esp_size_bytes,
+            "ESP",
+        );
+        let esp_fs = FileSystem::new(esp, FsOptions::new()).expect("esp fat");
+        let mut entry = esp_fs
+            .root_dir()
+            .open_dir("loader")
+            .expect("loader")
+            .open_dir("entries")
+            .expect("entries")
+            .open_file("umf.conf")
+            .expect("umf.conf");
+        let mut conf = String::new();
+        entry.read_to_string(&mut conf).expect("read entry");
+        assert!(
+            conf.contains(&format!("rootfstype={fs}")),
+            "--fs {fs} must put rootfstype={fs} on the cmdline: {conf}",
+        );
+        for other in RootfsFs::ALL {
+            if other != fs {
+                assert!(
+                    !conf.contains(&format!("rootfstype={other}")),
+                    "cmdline for {fs} must not also name {other}: {conf}",
+                );
+            }
+        }
+    }
+}
+
+/// Skip (loudly) when the host lacks the tool; `UMF_REQUIRE_MKFS=1` turns the
+/// skip into a failure so a CI lane cannot report green having exercised only
+/// the in-process writer.
+fn mkfs_available_or_skip(fs: RootfsFs) -> Option<()> {
+    let Some(tool) = fs.host_mkfs() else {
+        return Some(());
+    };
+    if crate::filesystem::tests::tool_is_available(tool) {
+        return Some(());
+    }
+    assert!(
+        !std::env::var("UMF_REQUIRE_MKFS")
+            .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
+        "UMF_REQUIRE_MKFS is set but `{tool}` is missing — this lane is supposed to \
+         exercise the {fs} path end to end and would otherwise report green having \
+         projected only squashfs",
+    );
+    eprintln!("skipping end-to-end {fs} projection: `{tool}` not on PATH");
+    None
 }

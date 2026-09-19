@@ -272,11 +272,14 @@ fn walk_ancestors(path: &Path, root_prefix: &Path) -> Vec<PathBuf> {
 ///
 /// Walks `modules_root/kernel/` looking for module files (`*.ko` or
 /// `*.ko.gz` or `*.ko.xz` or `*.ko.zst`) matching the flavor's allowlist.
-fn collect_modules_for(
-    modules_root: &Path,
-    flavor: &InitramfsFlavor,
-) -> Result<Vec<PathBuf>, InitrdError> {
-    let allowlist: &[&str] = match flavor {
+/// The kernel modules the initramfs carries, by flavor.
+///
+/// Extracted from `collect_modules_for` so a test can assert the set
+/// directly: a missing root-filesystem driver here is an unbootable disk,
+/// and the symptom is a kernel panic at switch_root rather than anything
+/// this crate could report.
+fn modules_allowlist(flavor: &InitramfsFlavor) -> &'static [&'static str] {
+    match flavor {
         // Boot: whatever might carry the root filesystem. virtio covers VMs;
         // the rest are what real hardware presents. A name absent from the
         // kernel's module tree (compiled-in, or not built) simply is not
@@ -317,7 +320,15 @@ fn collect_modules_for(
             "xhci_hcd",
             "xhci_pci",
             "usb_storage",
-            umf_core::boot::ROOTFS_FSTYPE,
+            // Every filesystem `umf compile --fs` can write. Which one this
+            // disk actually carries is not known at build time — it is a
+            // projection choice — so carry all the drivers and let the init
+            // script mount whatever `rootfstype=` names. Listing a module
+            // costs nothing when unused (see the note above), so this is the
+            // cheap half of making one image projectable to any of them.
+            "squashfs",
+            "ext4",
+            "erofs",
         ],
         InitramfsFlavor::Run => &[
             // Boot-side basics — still needed even when the rootfs is on
@@ -327,7 +338,11 @@ fn collect_modules_for(
             "virtio_pci",
             "virtio_pci_modern_dev",
             "virtio_blk",
-            umf_core::boot::ROOTFS_FSTYPE,
+            // The RUN micro-VM boots the layer state through whichever
+            // filesystem the caller staged, so carry the same set.
+            "squashfs",
+            "ext4",
+            "erofs",
             // 9p filesystem (host-staging share).
             "9p",
             "9pnet",
@@ -336,7 +351,19 @@ fn collect_modules_for(
             // package repos / git remotes / etc.
             "virtio_net",
         ],
-    };
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn modules_allowlist_for_test(flavor: &InitramfsFlavor) -> &'static [&'static str] {
+    modules_allowlist(flavor)
+}
+
+fn collect_modules_for(
+    modules_root: &Path,
+    flavor: &InitramfsFlavor,
+) -> Result<Vec<PathBuf>, InitrdError> {
+    let allowlist: &[&str] = modules_allowlist(flavor);
 
     let kernel_dir = modules_root.join("kernel");
     if !kernel_dir.is_dir() {
@@ -437,10 +464,27 @@ fn build_boot_init_script(release: &str, modules: &[PathBuf], modules_root: &Pat
     s.push_str("    exec sh\n");
     s.push_str("fi\n");
     s.push('\n');
-    s.push_str(&format!(
-        "mount -t {} -o ro \"$ROOT\" /sysroot\n",
-        umf_core::boot::ROOTFS_FSTYPE,
-    ));
+    // Take the filesystem from the cmdline for the same reason the device is
+    // taken from it: `umf compile` is the one that decided, and it wrote both.
+    // Baking a type in here instead would pin the image to one filesystem at
+    // *build* time and make `umf compile --fs` produce an unbootable disk.
+    s.push_str("# Resolve the root filesystem. `umf compile` writes\n");
+    s.push_str("# `rootfstype=<fs>` alongside `root=`; honour it rather than\n");
+    s.push_str("# assuming one, so the same image boots whichever filesystem\n");
+    s.push_str("# the disk was projected with.\n");
+    s.push_str("ROOTFSTYPE=\"\"\n");
+    s.push_str("for _arg in $(cat /proc/cmdline 2>/dev/null); do\n");
+    s.push_str("    case \"$_arg\" in rootfstype=*) ROOTFSTYPE=\"${_arg#rootfstype=}\" ;; esac\n");
+    s.push_str("done\n");
+    s.push('\n');
+    s.push_str("# No `-t` at all when the cmdline carried none: the kernel then\n");
+    s.push_str("# tries each filesystem in /proc/filesystems, which is exactly\n");
+    s.push_str("# the set the modules above just registered.\n");
+    s.push_str("if [ -n \"$ROOTFSTYPE\" ]; then\n");
+    s.push_str("    mount -t \"$ROOTFSTYPE\" -o ro \"$ROOT\" /sysroot\n");
+    s.push_str("else\n");
+    s.push_str("    mount -o ro \"$ROOT\" /sysroot\n");
+    s.push_str("fi\n");
     s.push('\n');
     s.push_str("# Pivot.\n");
     s.push_str("exec switch_root /sysroot /sbin/init\n");

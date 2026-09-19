@@ -385,13 +385,15 @@ fn run_bootable(
     // same image reuses the cached block — the shared `cache_variant()` keeps
     // the key identical to `umf compile` / `umf save`.
     let geometry = DiskGeometry::default();
-    let variant = geometry.cache_variant();
+    // `None`: `umf run` has no `--fs`, so it projects (and looks up) the
+    // image's recorded default, exactly as a plain `umf compile` would.
+    let variant = geometry.cache_variant(None);
     let block = layout.block_cache_path(image_digest, &variant)?;
     if block.is_file() {
         info!(block = %block.display(), "bootable block cache hit");
     } else {
         info!(reference, "compiling bootable image before boot");
-        umf_compile::compile_image(layout, reference, &block, geometry, None)?;
+        umf_compile::compile_image(layout, reference, &block, geometry, None, None)?;
     }
     println!("Compiled {reference} -> {} ; booting…", block.display());
 
