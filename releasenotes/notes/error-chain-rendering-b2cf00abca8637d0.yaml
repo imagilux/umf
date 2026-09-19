@@ -1,0 +1,24 @@
+---
+fixes:
+  - |
+    CLI errors now show what caused them. The dispatcher that prints a failed
+    command's error was bounded on ``Display``, so it could not reach
+    ``std::error::Error::source()`` and every error was rendered by its top
+    line alone.
+    That was invisible most of the time: thiserror interpolates the inner error
+    at each level, so a chain of UMF's own errors already renders in full. It
+    broke at the first *foreign* error whose ``Display`` omits its own source.
+    ``reqwest::Error`` is exactly that, so an unreachable registry reported the
+    request URL and discarded the reason underneath it — the operator saw a URL
+    and no indication of whether DNS, a refused connection or TLS was at fault.
+    Offline, which is when that matters most, there was nothing to go on::
+
+        error: build: OCI distribution: error sending request for url (…)
+          caused by: client error (Connect)
+          caused by: tunnel error: unsuccessful
+
+    A cause is printed only when its text is not already part of what has been
+    rendered, so the levels thiserror already interpolated do not repeat
+    themselves and a fully-interpolated chain still renders as a single line.
+    The first line is unchanged, so existing expectations and log scraping
+    continue to match; causes follow on indented continuation lines.

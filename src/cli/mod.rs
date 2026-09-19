@@ -878,14 +878,51 @@ enum SbomAction {
     },
 }
 
+/// Render an error as `error: <display>` plus any cause the top-level
+/// `Display` did not already state.
+///
+/// The bound on [`finish`] used to be `Display`, which structurally could not
+/// reach [`std::error::Error::source`] — so every CLI error was rendered by its
+/// top line alone. That is invisible most of the time, because thiserror's
+/// `#[error("registry: {0}")]` interpolates the inner error at each level, so a
+/// chain of UMF's own errors renders in full. It breaks at the first *foreign*
+/// error whose own `Display` omits its source: `reqwest::Error` is exactly
+/// that, so an unreachable registry reported the request and discarded the DNS
+/// failure, refused connection or TLS error underneath it. Offline — the case
+/// the sovereignty pillar is about — the operator saw a URL and no reason.
+///
+/// Because of that same `{0}` interpolation, printing every `source()` would
+/// repeat text the reader has already seen. Each cause is therefore emitted
+/// only when its message is not already present in what has been rendered,
+/// which collapses the duplicated levels and leaves the genuinely-new leaves.
+///
+/// The first line is deliberately unchanged (`error: <display>`), so existing
+/// expectations and any log scraping still match; causes follow on indented
+/// continuation lines.
+fn render_error_chain(err: &dyn std::error::Error) -> String {
+    let mut rendered = format!("error: {err}");
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        // Skip an empty cause as well as one already stated above: a
+        // `Display`-less wrapper contributes nothing and would emit a bare
+        // `caused by:` line.
+        if !text.is_empty() && !rendered.contains(&text) {
+            rendered.push_str(&format!("\n  caused by: {text}"));
+        }
+        source = cause.source();
+    }
+    rendered
+}
+
 /// Map a subcommand handler's `Result<(), E>` to a process exit code: success,
 /// or print `error: <e>` to stderr and fail. Collapses the per-arm boilerplate
 /// in [`run()`]'s dispatch.
-fn finish<E: std::fmt::Display>(result: Result<(), E>) -> ExitCode {
+fn finish<E: std::error::Error>(result: Result<(), E>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {err}");
+            eprintln!("{}", render_error_chain(&err));
             ExitCode::FAILURE
         }
     }
@@ -1264,5 +1301,143 @@ pub fn run() -> ExitCode {
             filter,
             prune,
         } => ps::run_ps(output, sort.as_deref(), &filter, prune),
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use super::render_error_chain;
+
+    /// A foreign leaf whose `Display` hides its own source — the shape that
+    /// motivated this. `reqwest::Error` behaves exactly this way.
+    #[derive(Debug)]
+    struct Leaf(&'static str);
+    impl std::fmt::Display for Leaf {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for Leaf {}
+
+    /// A wrapper that interpolates its source, the way thiserror's
+    /// `#[error("... {0}")]` does.
+    #[derive(Debug)]
+    struct Interpolating {
+        prefix: &'static str,
+        source: Box<dyn std::error::Error + 'static>,
+    }
+    impl std::fmt::Display for Interpolating {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}: {}", self.prefix, self.source)
+        }
+    }
+    impl std::error::Error for Interpolating {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.source.as_ref())
+        }
+    }
+
+    /// A wrapper that does NOT restate its source — `reqwest::Error`'s shape,
+    /// and the reason the cause was being lost.
+    #[derive(Debug)]
+    struct Opaque {
+        shown: &'static str,
+        source: Box<dyn std::error::Error + 'static>,
+    }
+    impl std::fmt::Display for Opaque {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.shown)
+        }
+    }
+    impl std::error::Error for Opaque {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.source.as_ref())
+        }
+    }
+
+    #[test]
+    fn a_cause_the_top_line_hides_is_surfaced() {
+        // The whole point: an opaque wrapper states only its own text, so
+        // without walking `source()` the reason is never shown.
+        let err = Opaque {
+            shown: "error sending request for url (https://example.invalid/v2/x)",
+            source: Box::new(Leaf("failed to lookup address information")),
+        };
+        let rendered = render_error_chain(&err);
+        assert!(
+            rendered.starts_with("error: error sending request for url"),
+            "top line is unchanged:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("caused by: failed to lookup address information"),
+            "the hidden cause must be surfaced:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_cause_already_stated_above_is_not_repeated() {
+        // thiserror's `{0}` interpolation means each level already contains the
+        // level below. Printing every source would echo the same text three
+        // times; the reader should see it once.
+        let err = Interpolating {
+            prefix: "build",
+            source: Box::new(Interpolating {
+                prefix: "registry",
+                source: Box::new(Leaf("no such host")),
+            }),
+        };
+        let rendered = render_error_chain(&err);
+        assert_eq!(
+            rendered, "error: build: registry: no such host",
+            "a fully-interpolated chain renders as one line:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("caused by"),
+            "nothing new to add, so no continuation lines:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn interpolated_levels_collapse_but_a_hidden_leaf_still_shows() {
+        // The real shape: UMF's own thiserror levels interpolate down to a
+        // foreign error, which then hides its own cause.
+        let err = Interpolating {
+            prefix: "build",
+            source: Box::new(Interpolating {
+                prefix: "OCI distribution",
+                source: Box::new(Opaque {
+                    shown: "error sending request",
+                    source: Box::new(Leaf("connection refused")),
+                }),
+            }),
+        };
+        let rendered = render_error_chain(&err);
+        assert_eq!(
+            rendered,
+            "error: build: OCI distribution: error sending request\n  \
+             caused by: connection refused",
+            "exactly one continuation line, for the only new information:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn an_error_with_no_source_renders_as_one_line() {
+        let rendered = render_error_chain(&Leaf("path does not exist: /nope"));
+        assert_eq!(rendered, "error: path does not exist: /nope");
+    }
+
+    #[test]
+    fn an_empty_cause_does_not_emit_a_bare_continuation_line() {
+        // A `Display`-less wrapper contributes nothing; emitting `caused by: `
+        // with no text would be worse than omitting it.
+        let err = Opaque {
+            shown: "outer",
+            source: Box::new(Leaf("")),
+        };
+        assert_eq!(render_error_chain(&err), "error: outer");
     }
 }

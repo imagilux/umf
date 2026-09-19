@@ -255,6 +255,55 @@ emulate its `RUN` steps; the `binfmt_misc` + `qemu-user-static` path the spec
 describes is not wired. Pairs naturally with the new aarch64 CI lane, which now
 gives a place to prove it.
 
+### P1.5 — A CLI error never printed why it failed · ~~partial~~ fixed · [#56](https://github.com/imagilux/umf/issues/56)
+
+Every subcommand funnelled its result through one helper in `src/cli/mod.rs`,
+and that helper was bounded on `std::fmt::Display`. A `Display` bound cannot
+reach `source()` — so the cause chain was not *dropped by a bug*, it was
+structurally unreachable. Whatever the top-level message happened to say was
+the entire diagnostic the operator got.
+
+UMF's own errors mostly survived this, because they are written to be
+self-contained (`path does not exist: …`, `… is not in the local layout —
+run umf pull …`). The failures that mattered were the ones whose real
+explanation lives in a **foreign leaf**: `reqwest::Error`'s `Display` is
+deliberately cause-less, so a registry transport failure rendered as the URL
+and nothing else, while the actual reason — proxy tunnel refused, TLS
+rejected, DNS failure — sat one or two `source()` hops below, visible only in
+`RUST_LOG` debug output.
+
+This is the error-reporting half of the sovereignty story in P0.1: an
+unreachable source **should** fail, and the operator should be told which
+part of reaching it failed.
+
+**Fix.** Bound the helper on `std::error::Error` and walk `source()`,
+printing each hop as an indented `caused by:` line:
+
+```
+error: build: OCI distribution: error sending request for url (https://…/manifests/1)
+  caused by: client error (Connect)
+  caused by: tunnel error: unsuccessful
+```
+
+The de-duplication matters as much as the walk. thiserror's `#[error("… {0}")]`
+interpolates the inner error's `Display` into the parent, so a naive walk
+echoes the same sentence at every level; a cause whose text already appears
+above is skipped, as is an empty one (a `Display`-less wrapper would otherwise
+emit a bare `caused by:`). The **first line is byte-identical to what it was
+before**, deliberately: anything scraping `error: …` out of CI logs keeps
+working, and the new detail is purely additive.
+
+**Verification.** Five unit tests over hand-built error chains — a cause the
+top line hides, a cause already stated above, interpolated levels collapsing
+while a hidden leaf still shows, a source-less error, and an empty cause. All
+five were confirmed to fail when the walk or the de-duplication is removed.
+Exit codes are unchanged.
+
+**Follow-on.** This removes the need for the string-matching workaround
+introduced in P0.1's wake, which classified a pull failure as environmental by
+matching `reqwest`'s exact cause-less phrasing — the classification can read
+the chain instead of guessing from the top line.
+
 ---
 
 ## P2 — verification debt
