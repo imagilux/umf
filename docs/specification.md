@@ -137,6 +137,41 @@ The backends, the address categories, and the operator workflow are detailed in 
 
 ---
 
+## Lexical rules
+
+### Comments
+
+`#` opens a comment that runs to the end of the line, **except** inside the
+shell payload of `RUN`, `CMD` or `ENTRYPOINT`, where it is an ordinary
+character handed to the shell.
+
+```
+# a comment
+FROM alpine:3.21        # also a comment — UMF allows this; Dockerfile does not
+RUN curl http://x/a#frag   # the `#frag` reaches the shell verbatim
+```
+
+The exception exists because a shell payload is *data*, not structured
+operands: a URL fragment, a colour literal or a `$'…#…'` quoting construct must
+survive into the command. Nothing is lost by it — an unquoted `#` already opens
+a comment to the shell, so a genuine trailing comment on a `RUN` line behaves
+the same either way.
+
+Quoting does not affect the rule. A `#` inside a quoted string is always
+literal, everywhere.
+
+### Unknown directive options
+
+A directive MUST reject a long option it does not implement, rather than
+ignoring it. Options change what a build produces, so accepting one and doing
+nothing with it yields an image that differs from the recipe with no
+diagnostic — a failure that surfaces far from its cause, if at all. Refusing an
+option an author needs is recoverable; silently discarding it is not.
+
+This applies to forward compatibility as well: an implementation MUST NOT
+accept an option it does not understand on the grounds that a later version
+might. `ADD --chown=…`, for example, is refused rather than dropped.
+
 ## Directives Reference
 
 ### FROM

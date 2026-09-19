@@ -1314,3 +1314,107 @@ fn run_exec_form_rejects_an_unquoted_element() {
         "exec-form elements must be quoted strings",
     );
 }
+
+// ── Docker-compatibility regressions ────────────────────────────────────────
+//
+// Four defects on ordinary Docker-shaped input. Each of these was reproduced
+// against the built binary before the fix; they are grouped so the intent
+// stays visible: a directive must never accept input and quietly do something
+// other than what it says.
+
+/// The shell payload of RUN / CMD / ENTRYPOINT is handed to a shell verbatim,
+/// so `#` in it is data. It used to open a comment anywhere, which truncated
+/// the rest of the line — a URL fragment or an unquoted colour literal was
+/// silently discarded and the build ran a different command than it read.
+#[test]
+fn a_hash_inside_a_shell_payload_is_not_a_comment() {
+    let cases = [
+        ("RUN curl http://x/a#frag", "curl http://x/a#frag"),
+        ("RUN echo c=#ff0000", "echo c=#ff0000"),
+    ];
+    for (line, expected) in cases {
+        let src = format!("FROM debian:bookworm\n{line}\n");
+        let ast = parse(&src).unwrap_or_else(|e| panic!("parse `{line}`: {e:?}"));
+        let Some(Directive::Run(run)) = ast.stages[0].directives.first() else {
+            panic!("expected a RUN directive from `{line}`");
+        };
+        match &run.command {
+            umf_core::ast::RunCommand::Shell(s) => assert_eq!(
+                s.value, expected,
+                "`#` must survive into the shell payload of `{line}`"
+            ),
+            other => panic!("expected shell form, got {other:?}"),
+        }
+    }
+}
+
+/// A structured directive is not a shell payload, so a trailing comment there
+/// is still stripped — the fix above must not cost that convenience.
+#[test]
+fn a_trailing_comment_on_a_structured_directive_is_still_stripped() {
+    let ast = parse("# lead\nFROM scratch # trailing\n").expect("parse");
+    assert!(matches!(ast.stages[0].from.source, FromSource::Scratch));
+    // A comment line following a RUN also still lexes as a comment: the
+    // shell-payload region ends at the newline, it does not leak onward.
+    let ast = parse("FROM debian:bookworm\nRUN echo hi\n# comment\nEXPOSE 80\n").expect("parse");
+    assert_eq!(
+        ast.stages[0].directives.len(),
+        2,
+        "comment must not become a directive"
+    );
+}
+
+/// Directive keywords are ordinary variable names. `ENV USER=app` is about as
+/// common as recipes get and Docker accepts it, but the lexer classifies the
+/// whole keyword set as keywords wherever they appear, so every one of them
+/// was unusable as an ENV or ARG name.
+#[test]
+fn directive_keywords_are_usable_as_env_and_arg_names() {
+    for key in ["USER", "RUN", "FROM", "CMD", "ADD", "COPY", "LABEL", "ENV"] {
+        let env = format!("FROM debian:bookworm\nENV {key}=x\n");
+        assert!(parse(&env).is_ok(), "`ENV {key}=x` must parse");
+        let arg = format!("FROM debian:bookworm\nARG {key}=x\n");
+        assert!(parse(&arg).is_ok(), "`ARG {key}=x` must parse");
+    }
+    // LABEL is deliberately NOT in that list: its keys follow the OCI
+    // reverse-DNS grammar, which requires a lowercase start. `LABEL USER=x`
+    // is correctly refused for that reason, not because of the keyword set.
+    assert!(parse("FROM debian:bookworm\nLABEL user=x\n").is_ok());
+    assert!(parse("FROM debian:bookworm\nLABEL USER=x\n").is_err());
+}
+
+/// An option that would change the produced image must never be dropped on the
+/// floor. `ADD --chown=` / `--chmod=` parsed clean and did nothing, so the
+/// build succeeded and the image was quietly wrong.
+#[test]
+fn add_and_copy_refuse_options_they_do_not_implement() {
+    for verb in ["ADD", "COPY"] {
+        for opt in ["--chown=1000:1000", "--chmod=755", "--future-flag=1"] {
+            let src = format!("FROM debian:bookworm\n{verb} {opt} ./f /f\n");
+            assert!(
+                parse(&src).is_err(),
+                "`{verb} {opt}` must be refused rather than silently ignored",
+            );
+        }
+    }
+    // The one option that IS implemented keeps working.
+    let src = "FROM debian:bookworm AS b\nFROM debian:bookworm\nADD --from=b /a /b\n";
+    assert!(parse(src).is_ok(), "`ADD --from=<stage>` must still parse");
+}
+
+/// Unrecognised RUN options used to fall through into the command string, so
+/// `RUN --network=none echo hi` ran the literal command `--network=none echo
+/// hi` and failed at execution time with a shell error pointing nowhere near
+/// the cause.
+#[test]
+fn run_refuses_options_it_does_not_implement() {
+    for opt in ["--network=none", "--security=insecure", "--future-flag"] {
+        let src = format!("FROM debian:bookworm\nRUN {opt} echo hi\n");
+        assert!(
+            parse(&src).is_err(),
+            "`RUN {opt}` must be refused rather than leaking into the command",
+        );
+    }
+    let src = "FROM debian:bookworm\nRUN --mount=type=secret,id=k,target=/s cat /s\n";
+    assert!(parse(src).is_ok(), "`RUN --mount` must still parse");
+}

@@ -81,27 +81,39 @@ Note the corollary: because the micro-VM has no NIC, there is currently nothing
 for an SSRF policy to police on that path. The absence of policy enforcement in
 `vm_runner.rs` is a consequence of the missing network, not a separate hole.
 
-### P0.3 — Parser rejects and silently mangles ordinary Docker-compatible input · broken · unfiled
+### P0.3 — Parser rejects and silently mangles ordinary Docker-compatible input · ~~broken~~ fixed
 
-The DSL is the product's front door, and four defects sit in it. All four were
-reproduced against the built binary; each is small to fix.
+The DSL is the product's front door, and four defects sat in it.
 
-| input | actual behaviour | expected |
+**Fixed.** All four were reproduced against the built binary, fixed, and each
+is now covered by a regression test verified to fail without its fix.
+
+| input | was | now |
 | --- | --- | --- |
-| `ENV USER=app` | **rejected** — *"expected key after ENV"* | accepted |
-| `ADD --chown=1000:1000 ./f /f` | parses, flag **silently dropped** | applied, or rejected |
-| `ADD --chmod=755 ./f /f` | parses, flag **silently dropped** | applied, or rejected |
-| `RUN curl http://x/a#frag` | becomes `curl http://x/a` | preserved |
-| `RUN --network=none echo hi` | command becomes `--network=none echo hi` | rejected with a clear error |
+| `ENV USER=app` / `ARG USER=app` | **rejected** — *"expected key after ENV"* | accepted |
+| `ADD --chown=1000:1000 ./f /f` | parsed, flag **silently dropped** | refused with a hint |
+| `ADD --chmod=755 ./f /f` | parsed, flag **silently dropped** | refused with a hint |
+| `RUN curl http://x/a#frag` | became `curl http://x/a` | preserved |
+| `RUN --network=none echo hi` | command became `--network=none echo hi` | refused with a hint |
 
-The `ENV` case is the worst of them: directive keywords are refused as keys
-across `ENV`, `ARG` and `LABEL`, so `USER`, `RUN`, `ADD`, `COPY`, `FROM`,
-`LABEL`, `ENV` and `CMD` are all unusable as variable names. `USER` is among
-the most common environment variables there is, and Docker accepts it.
+The keyword case affected `ENV` and `ARG`. An earlier draft of this roadmap
+also listed `LABEL`; that was wrong. `LABEL USER=x` is refused by the OCI
+label-key grammar, which requires a lowercase first character — `LABEL user=x`
+has always worked, and the refusal is correct.
 
-The silently-dropped `ADD` flags are the most dangerous, because the build
-succeeds and the image is quietly wrong. Dropping a flag on the floor is worse
-than refusing it.
+Two design notes worth keeping:
+
+- `#` is now literal only inside a **shell payload** (`RUN` / `CMD` /
+  `ENTRYPOINT` shell form); a trailing comment on a structured directive is
+  still stripped. Dockerfile has no inline comments at all, so this is
+  deliberately more permissive than Docker while losing nothing: an unquoted
+  `#` in a payload already opens a comment *to the shell*, so passing it
+  through changes nothing for `RUN foo # note` and preserves fragments and
+  colour literals.
+- Unknown long options are now **refused** rather than dropped for
+  forward-compatibility. Silent forward-compat is the wrong trade for a flag
+  that changes the produced image: refusing is recoverable, shipping the wrong
+  ownership is not.
 
 ---
 

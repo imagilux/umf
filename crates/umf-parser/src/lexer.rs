@@ -179,6 +179,10 @@ struct Lexer<'a> {
     pos: usize,
     tokens: Vec<Token>,
     errors: Vec<Diagnostic>,
+    /// True once a `RUN` / `CMD` / `ENTRYPOINT` keyword has been emitted on the
+    /// current logical line, meaning the rest of the line is a payload handed
+    /// to a shell rather than structured operands. Reset at each `Newline`.
+    in_shell_payload: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -189,6 +193,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             tokens: Vec::new(),
             errors: Vec::new(),
+            in_shell_payload: false,
         }
     }
 
@@ -207,7 +212,22 @@ impl<'a> Lexer<'a> {
                     // so Windows-authored recipes join lines just like LF ones.
                     self.pos += 3;
                 }
-                b'#' => self.skip_comment(),
+                // `#` opens a comment everywhere EXCEPT inside a shell payload
+                // (`RUN` / `CMD` / `ENTRYPOINT` in shell form), where it is an
+                // ordinary byte handed to the shell.
+                //
+                // It used to be a comment unconditionally, which silently
+                // truncated the rest of the line mid-payload:
+                // `RUN curl http://x/a#frag` became `curl http://x/a`, and an
+                // unquoted `#ff0000` lost its value. Passing `#` through
+                // instead costs nothing for a genuine trailing comment — an
+                // unquoted `#` already opens a comment *to the shell* — while
+                // keeping fragments, colour literals and `$'...#...'` intact.
+                //
+                // Structured directives keep the friendlier behaviour: a
+                // trailing `FROM scratch  # note` is still stripped here, which
+                // Dockerfile itself does not allow.
+                b'#' if !self.in_shell_payload => self.skip_comment(),
                 b'"' | b'\'' => self.lex_string(c),
                 b'=' => self.emit(TokenKind::Punct(Punct::Equals), 1),
                 b',' => self.emit(TokenKind::Punct(Punct::Comma), 1),
@@ -240,8 +260,23 @@ impl<'a> Lexer<'a> {
 
     fn emit(&mut self, kind: TokenKind, len: usize) {
         let span = Span::new(self.pos, self.pos + len);
-        self.tokens.push(Token { kind, span });
+        self.push_token(Token { kind, span });
         self.pos += len;
+    }
+
+    /// The single place tokens enter the stream, so the shell-payload flag
+    /// cannot drift: a `RUN` / `CMD` / `ENTRYPOINT` keyword opens a payload
+    /// region and the logical line's end closes it. Everything in between is
+    /// handed to a shell verbatim, so `#` there is data, not a comment.
+    fn push_token(&mut self, token: Token) {
+        match &token.kind {
+            TokenKind::Keyword(Keyword::Run | Keyword::Cmd | Keyword::Entrypoint) => {
+                self.in_shell_payload = true;
+            }
+            TokenKind::Newline => self.in_shell_payload = false,
+            _ => {}
+        }
+        self.tokens.push(token);
     }
 
     fn skip_comment(&mut self) {
@@ -267,7 +302,7 @@ impl<'a> Lexer<'a> {
             if c == quote {
                 self.pos += 1;
                 let span = Span::new(start, self.pos);
-                self.tokens.push(Token {
+                self.push_token(Token {
                     kind: TokenKind::String(value),
                     span,
                 });
@@ -349,7 +384,7 @@ impl<'a> Lexer<'a> {
                 )),
             );
         }
-        self.tokens.push(Token {
+        self.push_token(Token {
             kind: TokenKind::Number(n),
             span,
         });
@@ -364,7 +399,7 @@ impl<'a> Lexer<'a> {
         let span = Span::new(start, self.pos);
         let kind = Keyword::lookup(text)
             .map_or_else(|| TokenKind::Ident(text.to_string()), TokenKind::Keyword);
-        self.tokens.push(Token { kind, span });
+        self.push_token(Token { kind, span });
     }
 
     fn lex_long_option(&mut self) {
@@ -390,7 +425,7 @@ impl<'a> Lexer<'a> {
             None
         };
         let span = Span::new(start, self.pos);
-        self.tokens.push(Token {
+        self.push_token(Token {
             kind: TokenKind::LongOption { name, value },
             span,
         });
@@ -409,7 +444,7 @@ impl<'a> Lexer<'a> {
 const fn is_word_cont(c: u8) -> bool {
     !matches!(
         c,
-        b' ' | b'\t' | b'\r' | b'\n' | b'=' | b',' | b'[' | b']' | b'"' | b'\'' | b'#' | b'\\'
+        b' ' | b'\t' | b'\r' | b'\n' | b'=' | b',' | b'[' | b']' | b'"' | b'\'' | b'\\'
     ) && c >= 0x20
 }
 
