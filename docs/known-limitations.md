@@ -2,7 +2,7 @@
 
 The paths the reference implementation (`umf` **v0.0.1**) does not yet support, and the cases where the [Specification](specification.md) describes something the implementation currently rejects. Each entry is a real, reachable error (not a hypothetical), so you can recognise it and reach for the documented workaround. The DSL is pre-1.0; see [Stability & versioning](specification.md#stability-versioning).
 
-For the failure messages and fixes, see [Troubleshooting](troubleshooting.md). For host setup, [Prerequisites](prerequisites.md).
+For the failure messages and fixes, see [Troubleshooting](troubleshooting.md). For host setup, [Prerequisites](prerequisites.md). For what is being worked on next and in what order, see the [roadmap](https://github.com/imagilux/umf/blob/main/ROADMAP.md).
 
 ## Where the spec advertises more than the implementation accepts
 
@@ -35,6 +35,26 @@ The spec describes [EXPOSE](specification.md#expose) as emitting an actual defau
 - **Appliance bootable images** (a binary-path `ENTRYPOINT`, no init system) write `/etc/nftables.conf` but have no init to enable the `nftables` service, so the ruleset is present but not auto-loaded.
 
 So treat EXPOSE's default-deny as a guarantee of init-system bootable images; for the other shapes, enforce reachability with your runtime or an explicit boot-time hook.
+
+### Network access from a bootable build's `RUN`
+
+`RUN` steps in a **bootable** build execute in a micro-VM that is launched with
+no network device, so they have **no network access at all**. A step that
+installs packages or fetches a URL (`RUN apk add curl`, `RUN curl -o …`) cannot
+work there; it fails with the package manager's or the tool's own network
+error, not a UMF one.
+
+Container builds are unaffected — their `RUN` steps get a policed egress
+(rootful veth + NAT, or a rootless userspace backend).
+
+- **Spec vs. impl.** [RUN](specification.md#run) says *"The DSL surface is
+  identical either way — only the underlying runner differs."* Network reach is
+  the exception: it is not identical.
+
+Workarounds: bake anything network-dependent into the userland image that `ADD
+<oci-ref> /` lays down, or `ADD <url> <dst>` the payload at build time (that
+fetch happens on the host, which does have egress) and have the `RUN` step
+consume the local file.
 
 ## Rootless builds
 
@@ -83,6 +103,17 @@ Making it work means more than accepting the base: L2 would otherwise reinstall 
 - **Spec vs. impl.** `L0Kind::is_valid_from` already accepts a bootable base; the build pipeline does not.
 
 Previously this failed *silently* — a bootable base produced a container image with a kernel in its layers, which `umf compile` then refused for reasons that pointed nowhere near the cause.
+
+### `umf run --vmm` leaves a temporary directory behind
+
+Each VM spawn creates a temporary directory for the VMM control socket, plus a
+second one holding a writable copy of the UEFI variable store when firmware is
+used, and neither is removed when the VM exits. They accumulate under the
+system temp directory until the OS reclaims it.
+
+A bootable build spawns one micro-VM per `RUN` step, so a multi-step recipe
+leaves one directory per step. Nothing breaks, but a long-lived build host will
+want a periodic sweep until this is fixed.
 
 ## Cross-architecture
 
