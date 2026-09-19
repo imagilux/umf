@@ -98,15 +98,33 @@ The `--vmm=ch` (Cloud Hypervisor) backend does direct-kernel boot, disk boot wit
 
 Use `--vmm=qemu` (the default) for the most forgiving firmware story, or a guest image that does not configure its NIC.
 
-### Extending a `type=bootable` image
+### Extending a `type=bootable` image inherits its boot manifest
 
-The [spec](specification.md#l0-introspection) says a bootable image is a valid `FROM` — "extend it like any base and the result stays bootable". The builder does not implement that yet and **rejects it explicitly**: *extending a type=bootable image is not implemented yet; build FROM the kernel artifact it was built from*.
+A bootable image is a valid `FROM`, and extending one keeps it bootable: its
+layers already carry the merged userland + kernel tree, so the build lays that
+down and adds to it rather than reinstalling a kernel.
 
-Making it work means more than accepting the base: L2 would otherwise reinstall a kernel the base already carries, and the base's boot-manifest labels (`flavor`, `entrypoint`, `kernel.*`) are not inherited. Until then, derive from the kernel artifact the bootable image was built from and repeat the userland directives.
+What the extending recipe **leaves unsaid is inherited from the base**, not
+re-defaulted. That matters most for two keys, because the global defaults would
+otherwise silently change the artifact's shape:
 
-- **Spec vs. impl.** `L0Kind::is_valid_from` already accepts a bootable base; the build pipeline does not.
+- `org.imagilux.umf.flavor` — extending a `uki` base without restating the
+  flavor keeps `uki`, rather than falling back to `systemd-boot`.
+- `ENTRYPOINT` — extending an OpenRC base keeps OpenRC, rather than becoming
+  systemd.
 
-Previously this failed *silently* — a bootable base produced a container image with a kernel in its layers, which `umf compile` then refused for reasons that pointed nowhere near the cause.
+Anything the recipe *does* state wins, as usual. The rest of the manifest
+(`kernel.release`, `kernel.vmlinuz`, `initramfs`, `rootfs.fs`) is re-derived
+from the resulting tree, so it describes the extended image rather than the
+base.
+
+One case cannot be inherited and is refused rather than guessed. A base with a
+binary PID 1 records only `entrypoint=appliance` in its boot manifest — the
+label does not carry the argv — so the actual program comes from the standard
+OCI `Entrypoint` field. Images built before UMF recorded that field have
+nothing to recover, and extending one without restating `ENTRYPOINT` fails with
+a message saying so. Guessing would produce a disk that boots to a kernel panic
+with nothing pointing at the cause.
 
 ## Cross-architecture
 

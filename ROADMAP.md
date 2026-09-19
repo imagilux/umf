@@ -168,17 +168,42 @@ Verified two ways: a unit test that fails if the directories survive the
 handle, and a before/after count across the CLI suite showing no directories
 left behind.
 
-### P1.2 — Extending a `type=bootable` image · absent · [#28](https://github.com/imagilux/umf/issues/28)
+### P1.2 — Extending a `type=bootable` image · ~~absent~~ fixed · [#28](https://github.com/imagilux/umf/issues/28)
 
-The spec says a bootable image is a valid `FROM` and that extending it keeps it
-bootable. `L0Kind::is_valid_from` agrees; the build pipeline rejects it
-explicitly. The shape detection was fixed so the rejection is now loud and
-accurate rather than silently producing a broken container — but the capability
-itself is still unbuilt.
+**Fixed.** A bootable image is now a valid `FROM` in practice, not just per
+`L0Kind::is_valid_from`. Its layers already carry the merged userland + kernel
+tree, so the build lays that down with the same unpack loop a kernel artifact
+uses — there was never a separate L2 step to skip, which is why the change is
+smaller than the original note assumed.
 
-Making it work means more than accepting the base: L2 would otherwise reinstall
-a kernel the base already carries, and the base's boot-manifest labels
-(`flavor`, `entrypoint`, `kernel.*`) are not inherited.
+**The real work was inheritance, not layers.** `pick_flavor` and
+`pick_entrypoint` both silently default (`systemd-boot`, `systemd`), so a
+recipe extending a `uki` / OpenRC base without restating either would have
+quietly produced a `systemd-boot` / systemd image. Silence now means "keep what
+the base declared"; anything the recipe states still wins. The rest of the
+manifest (`kernel.release`, `kernel.vmlinuz`, `initramfs`, `rootfs.fs`) is
+re-derived from the resulting tree, so it describes the extended image.
+
+**One case is refused rather than guessed.** The boot-manifest `entrypoint`
+label is coarse by design — every binary PID 1 records `appliance`, dropping
+the argv — so an appliance's real entrypoint now comes from the standard OCI
+`Entrypoint` field, which bootable builds did not previously set at all.
+Setting it is independently more OCI-correct. A base built before that field
+existed has nothing to recover, and extending one without restating
+`ENTRYPOINT` fails with a message saying so: guessing yields a disk that boots
+to a kernel panic with nothing naming the cause.
+
+The other two halves of #28 — platform-aware introspection and not swallowing
+introspect errors into "not bootable" — landed earlier in
+[#44](https://github.com/imagilux/umf/pull/44).
+
+**Verification.** Unit tests cover each inheritance path, including the two
+refusal cases. The end-to-end test extends a real bootable image offline and
+asserts the result is still `type=bootable` with the base's manifest — built
+deliberately with a **`uki`** flavor and an **appliance** entrypoint, because a
+`systemd-boot` base would make "inherited" and "silently re-defaulted"
+indistinguishable and the assertion vacuous. Both inheritance paths were
+confirmed to fail the test when broken.
 
 ### P1.3 — `ext4` / `erofs` root partitions · absent · documented
 

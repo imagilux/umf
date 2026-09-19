@@ -834,3 +834,110 @@ async fn a_user_label_cannot_displace_a_boot_manifest_key() {
         "the builder's derived value must win over a forged one",
     );
 }
+
+// ── Extending a `type=bootable` base (#28) ──────────────────────────────────
+//
+// The spec says a bootable image is a valid `FROM` and that extending one
+// keeps it bootable. The risk in implementing that is not the layers — the
+// base's tree unpacks like any other — it is the boot manifest: if the
+// recipe's silence means "use the global default" rather than "keep what the
+// base declared", extending an OpenRC/UKI image without restating either
+// quietly turns it into a systemd/systemd-boot one, and the author finds out
+// when the disk boots wrong.
+
+fn bootable_base(
+    labels: &[(&str, &str)],
+    entrypoint: Option<Vec<&str>>,
+) -> crate::introspect::L0Profile {
+    crate::introspect::L0Profile {
+        kind: L0Kind::Bootable,
+        source: umf_core::l0::L0Source::Label,
+        manifest_digest: "sha256:base".to_string(),
+        labels: labels
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+        entrypoint: entrypoint.map(|v| v.into_iter().map(str::to_string).collect()),
+    }
+}
+
+#[test]
+fn an_init_system_entrypoint_round_trips_from_the_label_alone() {
+    for (label_value, expected) in [
+        ("systemd", EntrypointInit::Systemd),
+        ("openrc", EntrypointInit::OpenRc),
+        ("none", EntrypointInit::None),
+    ] {
+        let base = bootable_base(&[(label::ENTRYPOINT, label_value)], None);
+        assert_eq!(
+            inherited_entrypoint(&base),
+            Some(expected),
+            "`{label_value}` must be inheritable from the label with no OCI Entrypoint",
+        );
+    }
+}
+
+#[test]
+fn an_appliance_entrypoint_is_recovered_from_the_oci_entrypoint_field() {
+    // The boot-manifest label flattens every binary PID 1 to `appliance`, so
+    // the argv has to come from the standard OCI field.
+    let base = bootable_base(
+        &[(label::ENTRYPOINT, "appliance")],
+        Some(vec!["/usr/sbin/nginx", "-g", "daemon off;"]),
+    );
+    let Some(EntrypointInit::Exec(argv)) = inherited_entrypoint(&base) else {
+        panic!("an appliance base with an OCI Entrypoint must be inheritable");
+    };
+    let recovered: Vec<&str> = argv.iter().map(|a| a.value.as_str()).collect();
+    assert_eq!(recovered, ["/usr/sbin/nginx", "-g", "daemon off;"]);
+}
+
+#[test]
+fn an_appliance_base_without_an_oci_entrypoint_is_not_guessed_at() {
+    // An image built before the OCI Entrypoint was recorded. Guessing a PID 1
+    // yields a disk that boots to a panic with nothing naming the cause, so
+    // this must refuse and let the caller raise UninheritableEntrypoint.
+    let base = bootable_base(&[(label::ENTRYPOINT, "appliance")], None);
+    assert_eq!(inherited_entrypoint(&base), None);
+
+    // An empty argv is the same situation, not an entrypoint of "".
+    let empty = bootable_base(&[(label::ENTRYPOINT, "appliance")], Some(vec![]));
+    assert_eq!(inherited_entrypoint(&empty), None);
+}
+
+#[test]
+fn a_base_with_no_entrypoint_label_is_not_inheritable() {
+    // No boot manifest at all — the base predates it or is not really
+    // bootable. Assuming systemd here would be a guess.
+    assert_eq!(inherited_entrypoint(&bootable_base(&[], None)), None);
+    assert_eq!(
+        inherited_entrypoint(&bootable_base(&[(label::ENTRYPOINT, "weird")], None)),
+        None,
+    );
+}
+
+#[test]
+fn the_oci_entrypoint_is_recorded_for_appliances_and_omitted_otherwise() {
+    // This is what makes the round-trip above possible at all: without it an
+    // appliance's argv is recorded nowhere recoverable.
+    let path = EntrypointInit::Path(Spanned::new("/myapp --flag".to_string(), Span::new(0, 0)));
+    assert_eq!(
+        appliance_argv(&path),
+        Some(vec!["/myapp --flag".to_string()])
+    );
+
+    let exec = EntrypointInit::Exec(vec![
+        Spanned::new("/bin/app".to_string(), Span::new(0, 0)),
+        Spanned::new("-v".to_string(), Span::new(0, 0)),
+    ]);
+    assert_eq!(
+        appliance_argv(&exec),
+        Some(vec!["/bin/app".to_string(), "-v".to_string()]),
+    );
+
+    // `systemd` is not a meaningful OCI entrypoint for a container runtime,
+    // and the label round-trips init systems already.
+    assert_eq!(appliance_argv(&EntrypointInit::Systemd), None);
+    assert_eq!(appliance_argv(&EntrypointInit::OpenRc), None);
+    assert_eq!(appliance_argv(&EntrypointInit::None), None);
+}

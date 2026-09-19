@@ -1789,3 +1789,113 @@ fn registry_add_list_remove_roundtrip() {
         .success()
         .stdout(contains("1. ghcr.io"));
 }
+
+/// Extending a `type=bootable` image keeps it bootable, and inherits the
+/// base's boot manifest for anything the extending recipe leaves unsaid (#28).
+///
+/// Two deliberate choices make the assertions non-vacuous:
+///
+/// * The base declares `flavor=uki`, **not** the `systemd-boot` global
+///   default. With a `systemd-boot` base, "inherited" and "silently
+///   re-defaulted" produce identical output and the test proves nothing.
+/// * The base is an *appliance* (`ENTRYPOINT /myapp`), the shape whose PID 1
+///   the boot-manifest label cannot express — it records only `appliance`. If
+///   the OCI `Entrypoint` round-trip is broken, this build fails outright.
+#[test]
+fn extending_a_bootable_image_stays_bootable_and_inherits_the_manifest() {
+    use umf_core::architecture::Architecture;
+
+    let scratch = tempfile::tempdir().expect("scratch tempdir");
+    let layout_dir = scratch.path().join("layout");
+
+    // A base whose manifest differs from every default the extending recipe
+    // would otherwise fall back to.
+    seed_kernel_image(&layout_dir, "imagilux/kernel-linux:7.0", "7.0");
+    let mut efi = vec![b'M', b'Z', 0x90, 0x00];
+    efi.extend_from_slice(&[0u8; 252]);
+    let efi_path = format!(
+        "usr/lib/systemd/boot/efi/{}",
+        Architecture::host().systemd_boot_filename()
+    );
+    seed_rootfs_image(&layout_dir, "imagilux/rootfs:1.0", &[(efi_path, efi)]);
+
+    let base_recipe = scratch.path().join("base.umf");
+    std::fs::write(
+        &base_recipe,
+        "FROM imagilux/kernel-linux:7.0\n\
+         LABEL org.imagilux.umf.flavor=uki\n\
+         ADD imagilux/rootfs:1.0 /\n\
+         ENTRYPOINT /myapp\n",
+    )
+    .expect("write base recipe");
+
+    let base_tag = "example.invalid/bootable:base";
+    umf()
+        .args([
+            "build",
+            "--tag",
+            base_tag,
+            "--layout-dir",
+            layout_dir.to_str().unwrap(),
+            base_recipe.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Extend it. The recipe states NO flavor and NO ENTRYPOINT: both must come
+    // from the base. It adds only a label, so the build stays offline and
+    // needs no micro-VM.
+    let recipe = scratch.path().join("extend.umf");
+    std::fs::write(
+        &recipe,
+        format!("FROM {base_tag}\nLABEL org.example.layer=extended\n"),
+    )
+    .expect("write recipe");
+
+    let extended_tag = "example.invalid/bootable:extended";
+    umf()
+        .args([
+            "build",
+            "--tag",
+            extended_tag,
+            "--layout-dir",
+            layout_dir.to_str().unwrap(),
+            recipe.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let out = umf()
+        .args([
+            "inspect",
+            extended_tag,
+            "--layout-dir",
+            layout_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("spawn umf inspect");
+    assert!(out.status.success(), "inspect failed: {out:?}");
+    let rendered = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        rendered.contains("bootable"),
+        "the extended image must still be type=bootable:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("uki"),
+        "the base's `uki` flavor must be inherited, not re-defaulted to \
+         systemd-boot:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("systemd-boot"),
+        "the global default must NOT have overridden the base's flavor:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("appliance"),
+        "the base's appliance entrypoint must be inherited:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("org.example.layer"),
+        "the extending recipe's labels must be kept:\n{rendered}"
+    );
+}

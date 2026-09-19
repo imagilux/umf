@@ -1,0 +1,32 @@
+---
+features:
+  - |
+    A ``type=bootable`` image is now a usable ``FROM``. The specification has
+    always said extending one keeps it bootable, and ``L0Kind::is_valid_from``
+    has always agreed, but the builder rejected it outright with *"extending a
+    type=bootable image is not implemented yet"*. It now works: the base's
+    layers already carry the merged userland and kernel tree, so the build lays
+    that down and adds to it.
+    What the extending recipe leaves unsaid is **inherited from the base**
+    rather than re-defaulted. That matters for two keys in particular, because
+    the global defaults would otherwise change the artifact's shape without
+    saying so: extending a ``uki`` base without restating the flavor keeps
+    ``uki`` rather than falling back to ``systemd-boot``, and extending an
+    OpenRC base keeps OpenRC rather than becoming systemd. Anything the recipe
+    does state still wins. The remaining manifest keys
+    (``kernel.release``, ``kernel.vmlinuz``, ``initramfs``, ``rootfs.fs``) are
+    re-derived from the resulting tree, so they describe the extended image.
+    One case is refused rather than guessed. A base with a binary PID 1 records
+    only ``entrypoint=appliance`` in its boot manifest — the label does not
+    carry the argv — so the real program now comes from the standard OCI
+    ``Entrypoint`` field. An image built before UMF recorded that field has
+    nothing to recover, and extending one without restating ``ENTRYPOINT``
+    fails with a message saying so; guessing would produce a disk that boots to
+    a kernel panic with nothing pointing at the cause.
+  - |
+    Bootable images with a binary ``ENTRYPOINT`` now record it in the standard
+    OCI ``Entrypoint`` config field, which they previously left unset. Besides
+    making the extension path above possible, it means an ordinary OCI tool
+    inspecting the image can see what its PID 1 is. Init-system shapes leave
+    the field unset deliberately: ``systemd`` is not a meaningful entrypoint
+    for a container runtime, and the boot-manifest label already expresses it.
