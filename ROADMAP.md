@@ -219,28 +219,6 @@ deliberately with a **`uki`** flavor and an **appliance** entrypoint, because a
 indistinguishable and the assertion vacuous. Both inheritance paths were
 confirmed to fail the test when broken.
 
-### P1.5 — A registry transport failure does not say why · partial · unfiled
-
-An unresolvable reference correctly fails with exit `1`, but the message loses
-the cause:
-
-```
-error: build: OCI distribution: error sending request for url (https://example.invalid/v2/nope/manifests/1)
-```
-
-`reqwest::Error`'s `Display` is cause-less, so `RegistryError::Distribution`
-renders the request without the DNS failure, refused connection or TLS error
-underneath it. Offline — the case the sovereignty pillar is about — an operator
-sees a URL and no reason.
-
-The same flattening already caused a real bug once: `is_pull_environmental` in
-the CLI acceptance test could not classify transport failures because none of
-its substrings appear in that Display (fixed in #52 by matching the reqwest
-phrasing directly, which is a workaround rather than a fix).
-
-Walking `std::error::Error::source()` when formatting a registry error would
-surface the cause. Bounded and self-contained.
-
 ### P1.3 — `ext4` / `erofs` root partitions · absent · documented
 
 The boot-manifest label table lists `squashfs`, `erofs` and `ext4` as the
@@ -254,6 +232,76 @@ narrow the spec's value set.
 emulate its `RUN` steps; the `binfmt_misc` + `qemu-user-static` path the spec
 describes is not wired. Pairs naturally with the new aarch64 CI lane, which now
 gives a place to prove it.
+
+### P1.5 — A CLI error never printed why it failed · ~~partial~~ fixed · [#56](https://github.com/imagilux/umf/issues/56)
+
+Every subcommand funnelled its result through one helper in `src/cli/mod.rs`,
+and that helper was bounded on `std::fmt::Display`. A `Display` bound cannot
+reach `source()` — so the cause chain was not *dropped by a bug*, it was
+structurally unreachable. Whatever the top-level message happened to say was
+the entire diagnostic the operator got.
+
+Filed here originally as *"a registry transport failure does not say why"* —
+the symptom that surfaced it. The root cause turned out to sit a layer above
+the registry code, in the dispatcher every subcommand shares, so the fix is
+broader than the title suggested.
+
+UMF's own errors mostly survived this, because they are written to be
+self-contained (`path does not exist: …`, `… is not in the local layout —
+run umf pull …`). The failures that mattered were the ones whose real
+explanation lives in a **foreign leaf**: `reqwest::Error`'s `Display` is
+deliberately cause-less, so a registry transport failure rendered as the URL
+and nothing else, while the actual reason — proxy tunnel refused, TLS
+rejected, DNS failure — sat one or two `source()` hops below, visible only in
+`RUST_LOG` debug output.
+
+This is the error-reporting half of the sovereignty story in P0.1: an
+unreachable source **should** fail, and the operator should be told which
+part of reaching it failed.
+
+**Fix.** Bound the helper on `std::error::Error` and walk `source()`,
+printing each hop as an indented `caused by:` line:
+
+```
+error: build: OCI distribution: error sending request for url (https://…/manifests/1)
+  caused by: client error (Connect)
+  caused by: tunnel error: unsuccessful
+```
+
+The de-duplication matters as much as the walk. thiserror's `#[error("… {0}")]`
+interpolates the inner error's `Display` into the parent, so a naive walk
+echoes the same sentence at every level; a cause whose text already appears
+above is skipped, as is an empty one (a `Display`-less wrapper would otherwise
+emit a bare `caused by:`). The **first line is byte-identical to what it was
+before**, deliberately: anything scraping `error: …` out of CI logs keeps
+working, and the new detail is purely additive.
+
+**Verification.** Five unit tests over hand-built error chains — a cause the
+top line hides, a cause already stated above, interpolated levels collapsing
+while a hidden leaf still shows, a source-less error, and an empty cause. All
+five were confirmed to fail when the walk or the de-duplication is removed.
+Exit codes are unchanged. Three further tests pin the classifier's block
+boundary in both directions, and were each confirmed to fail under the
+opposite mistake — one under a whole-stream scan, two under an error-line-only
+read.
+
+**Also fixed.** The three `is_pull_environmental` helpers that decide whether
+a smoke lane reports a failure or skips it had the same defect, in a sharper
+form: two of them were bounded on `Display` while looking exclusively for
+substrings — `connection refused`, `name or service not known`, `network is
+unreachable` — that only ever appear *in the chain*. They could not match
+their own needles. They now walk `source()`; the CLI-level one reads the
+`error:` line **plus its `caused by:` continuations**, and no further, since
+`umf build` Debug-formats a whole chain into a `warn!` for each registry
+candidate that fails before a later one succeeds — scanning the stream would
+wave a genuine failure through as environmental.
+
+One correction to what #55 predicted: walking the chain does **not** retire
+the `reqwest`-phrasing needle added in #52. Behind an HTTP proxy the entire
+chain reads `client error (Connect)` → `tunnel error: unsuccessful`, naming no
+transport at all, so the top-line match is still the only thing that
+classifies that case. It is now one entry among several rather than the only
+one that can ever fire.
 
 ---
 

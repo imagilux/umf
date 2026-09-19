@@ -765,7 +765,8 @@ fn privileged_required() -> bool {
 /// `is_pull_environmental` in the engine smokes. A shared runner IP tripping
 /// Docker Hub's anonymous limit is not a regression in `umf`.
 ///
-/// Classification reads **only the final `error:` line** the CLI prints, never
+/// Classification reads **only the CLI's final error block** — the last
+/// `error:` line plus the indented `caused by:` lines that belong to it — never
 /// the whole captured stream. `umf build` resolves an unqualified reference
 /// across several registries and logs `warn!(… ?err …)` — a Debug-formatted
 /// error chain — for each candidate that fails before a later one succeeds
@@ -777,8 +778,12 @@ fn is_pull_environmental(stderr: &str) -> bool {
     // `error sending request for url` is `reqwest::Error`'s cause-less Display,
     // which is what `RegistryError::Distribution` ("OCI distribution: {0}")
     // renders for every transport failure — TLS, proxy, connect timeout, reset.
-    // It is the form umf actually emits; the rest cover the messages that reach
-    // the error line with their source attached.
+    // It stays in the list because the cause chain underneath it is not always
+    // more specific: behind an HTTP proxy the whole chain reads "client error
+    // (Connect) / tunnel error: unsuccessful", which names no transport at all.
+    // The rest are the OS-level messages that #56's chain rendering now brings
+    // within reach — before it, they could only ever appear on a `caused by:`
+    // line that was never printed.
     const ENVIRONMENTAL: &[&str] = &[
         "error sending request for url",
         "toomanyrequests",
@@ -788,12 +793,63 @@ fn is_pull_environmental(stderr: &str) -> bool {
         "network is unreachable",
         "connection reset by peer",
         "timed out",
+        "tunnel error",
     ];
-    stderr
-        .lines()
-        .rfind(|l| l.trim_start().starts_with("error:"))
-        .map(str::to_lowercase)
-        .is_some_and(|line| ENVIRONMENTAL.iter().any(|needle| line.contains(needle)))
+    let lines: Vec<&str> = stderr.lines().collect();
+    let Some(start) = lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with("error:"))
+    else {
+        return false;
+    };
+    let block = lines[start..]
+        .iter()
+        .enumerate()
+        // The `error:` line itself, then only its own continuations. Anything
+        // else — a later tracing line, a blank line — ends the block.
+        .take_while(|(i, l)| *i == 0 || l.trim_start().starts_with("caused by:"))
+        .map(|(_, l)| l.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
+    ENVIRONMENTAL.iter().any(|needle| block.contains(needle))
+}
+
+/// The classifier decides whether this lane reports a failure or waves it
+/// through as environmental, so a mistake in it is a vacuous green. These
+/// exercise the block boundary in both directions — the one thing that
+/// distinguishes "read the error and its causes" from "grep the stream".
+#[test]
+fn environmental_classification_reads_the_caused_by_lines() {
+    // Exactly the shape the CLI emits since #56: an opaque top line whose
+    // real reason is one `source()` hop below it. Before the causes were
+    // printed, nothing here would have matched.
+    let stderr = "error: build: OCI distribution: request failed\n                    caused by: connection refused\n";
+    assert!(
+        is_pull_environmental(stderr),
+        "a cause line naming the transport failure must classify as environmental",
+    );
+}
+
+#[test]
+fn a_genuine_failure_is_not_excused_by_an_earlier_warn_line() {
+    // `umf build` warns per registry candidate before a later one succeeds,
+    // Debug-formatting the whole chain. That text must not reach the
+    // classifier — it appears on builds that pulled perfectly well.
+    let stderr = "WARN resolve: candidate failed err=Distribution(Connection refused (os error 111))\n                  error: build: RUN step exited with status 1\n";
+    assert!(
+        !is_pull_environmental(stderr),
+        "transport text in a warn line above the error must not excuse a real failure",
+    );
+}
+
+#[test]
+fn classification_stops_at_the_end_of_the_error_block() {
+    // A line after the block is not part of the error, whatever it says.
+    let stderr = "error: build: RUN step exited with status 1\n                    caused by: process returned 1\n                  note: retrying may help if the connection refused earlier\n";
+    assert!(
+        !is_pull_environmental(stderr),
+        "text below the error block must not be read as one of its causes",
+    );
 }
 
 /// Full CLI end-to-end: `umf build` a tiny recipe, then `umf run` the
