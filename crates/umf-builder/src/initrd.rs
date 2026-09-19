@@ -489,10 +489,7 @@ fn build_run_init_script(release: &str, modules: &[PathBuf], modules_root: &Path
         crate::bootable::MOUNT_TAG_STAGING,
     ));
     s.push('\n');
-    s.push_str(
-        "# Bring up loopback + DHCP on virtio-net for outbound \
-                 access.\n",
-    );
+    s.push_str("# Bring up loopback + the NIC for outbound access.\n");
     s.push_str(
         "ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null || \
                  true\n",
@@ -501,7 +498,45 @@ fn build_run_init_script(release: &str, modules: &[PathBuf], modules_root: &Path
         "ip link set eth0 up 2>/dev/null || ifconfig eth0 up \
                  2>/dev/null || true\n",
     );
-    s.push_str("udhcpc -i eth0 -t 8 -T 2 -q 2>/dev/null || true\n");
+    s.push('\n');
+    // Static config when the host staged one (the policed-egress tap path),
+    // DHCP otherwise (the VMM's own user-mode stack, which runs a DHCP
+    // server). Static is preferred on the tap path because it needs no daemon
+    // in the namespace — one less external dependency on the build host.
+    s.push_str("# Address the NIC: static from the host's .umf-net if it\n");
+    s.push_str("# staged one, else DHCP from the VMM's user-mode stack.\n");
+    s.push_str("if [ -f /sysroot/.umf-net ]; then\n");
+    s.push_str("    . /sysroot/.umf-net\n");
+    s.push_str(
+        "    ip addr add \"$UMF_IP/$UMF_PREFIX\" dev eth0 2>/dev/null || \
+         ifconfig eth0 \"$UMF_IP\" netmask \"$UMF_MASK\" 2>/dev/null || true\n",
+    );
+    s.push_str(
+        "    ip route add default via \"$UMF_GW\" 2>/dev/null || \
+         route add default gw \"$UMF_GW\" 2>/dev/null || true\n",
+    );
+    // Resolver: the tap path has no DHCP to hand one over, and QEMU's built-in
+    // DNS only exists on the user-mode stack. Write the host's nameservers
+    // into the initramfs (a tmpfs) and bind-mount that over the rootfs copy —
+    // a plain write would go through the 9p share into the image layer, baking
+    // the build host's resolver into the artifact.
+    s.push_str("    if [ -n \"$UMF_DNS\" ]; then\n");
+    s.push_str("        : > /etc/resolv.conf\n");
+    s.push_str("        for ns in $UMF_DNS; do\n");
+    s.push_str("            echo \"nameserver $ns\" >> /etc/resolv.conf\n");
+    s.push_str("        done\n");
+    s.push_str(
+        "        [ -e /sysroot/etc/resolv.conf ] || \
+         (mkdir -p /sysroot/etc && : > /sysroot/etc/resolv.conf) 2>/dev/null\n",
+    );
+    s.push_str(
+        "        mount --bind /etc/resolv.conf /sysroot/etc/resolv.conf \
+         2>/dev/null || true\n",
+    );
+    s.push_str("    fi\n");
+    s.push_str("else\n");
+    s.push_str("    udhcpc -i eth0 -t 8 -T 2 -q 2>/dev/null || true\n");
+    s.push_str("fi\n");
     s.push('\n');
     s.push_str("# Bind kernel filesystems into the chroot target.\n");
     s.push_str("mkdir -p /sysroot/proc /sysroot/sys /sysroot/dev\n");

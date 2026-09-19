@@ -1,0 +1,41 @@
+---
+upgrade:
+  - |
+    **A bootable build whose recipe has ``RUN`` steps now requires
+    ``CAP_NET_ADMIN`` and ``nft``.** Run the build as root, or grant the
+    capability (``sudo setcap cap_net_admin+ep $(command -v umf)``).
+    A build that cannot create the network namespace now **fails** with an
+    actionable error rather than continuing. That is deliberate: the previous
+    behaviour reached the network through the VMM's own user-mode stack, which
+    UMF cannot program and which enforces no policy, so a silent fallback would
+    make the SSRF guarantee depend on how the build happened to be launched.
+    Bootable builds with no ``RUN`` steps are unaffected, as are all container
+    builds.
+security:
+  - |
+    A bootable build's ``RUN`` steps now obey the default-deny SSRF policy.
+    They egress through a tap device in a network namespace whose ``forward``
+    hook drops the same denied destinations a container ``RUN`` is refused —
+    loopback, link-local including the ``169.254.169.254`` cloud-metadata IP,
+    RFC1918, IPv6 unique-local and CGNAT — installed through the same in-crate
+    function the rootful container path uses, so the two cannot drift apart.
+    Previously a bootable ``RUN`` reached the network through the VMM's own
+    user-mode stack, which enforces nothing: host services, the cloud-metadata
+    endpoint and the local network were all reachable from a build step, and
+    ``--rootless-net-allow`` had no effect on it. The specification asserted
+    that RUN-step egress was namespaced and host-internal destinations denied
+    by default, which was false for that shape; it is now true for both.
+fixes:
+  - |
+    The QEMU backend honours ``VmSpec::net``, which it previously ignored
+    entirely — a caller-supplied tap was silently discarded and the user-mode
+    stack attached instead. It now attaches the tap and enters the namespace by
+    ``setns``-ing the forked child before exec, which is what the Cloud
+    Hypervisor backend already did.
+  - |
+    The generated run initramfs configures its NIC statically from a host-staged
+    ``.umf-net`` when one is present, falling back to DHCP otherwise, so the
+    policed path needs no DHCP daemon in the namespace.
+    The guest's resolver is bind-mounted over the rootfs copy rather than
+    written to it: a plain write would go through the 9p share and bake the
+    build host's nameservers into the image layer.

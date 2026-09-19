@@ -56,60 +56,59 @@ before any code is worth writing:
    into a multi-hour compile; an explicit `--build-missing` keeps the failure
    fast but means the air-gapped case needs a flag.
 
-### P0.2 — The SSRF policy does not cover a bootable build's `RUN` · partial · unfiled
+### P0.2 — The SSRF policy did not cover a bootable build's `RUN` · ~~partial~~ fixed
 
-**This item was previously recorded wrongly, and the correction matters more
-than the original claim.** It said bootable `RUN` steps had no network at all,
-reading `net: None` in the micro-VM spec as "no NIC". That field means only "no
-pre-built `TapNet`", which is the Cloud Hypervisor port-forward path; its own
-doc says so. The QEMU backend attaches `-netdev user,id=net0` plus a
-`virtio-net-pci` **unconditionally** (verified by dumping the generated
-argv for a micro-VM spec), and the generated run initramfs brings `eth0` up and
-runs `udhcpc`. Bootable `RUN` steps have had working network access all along.
+**Fixed.** A bootable build's `RUN` steps now egress through a tap in a network
+namespace whose `forward` hook carries the same default-deny CIDR set a
+container `RUN` obeys, installed by the same function so the two cannot drift.
+The VMM's own user-mode stack is no longer used for this path: it is the VMM's,
+not UMF's, so nothing could be enforced on it.
 
-A module-survey agent reported the real version of this — *"bootable-build
-micro-VM RUN steps get no umf-networking egress and no SSRF policy"* — and it
-was refuted here on the wrong grounds. That refutation was the error.
+**This item was recorded wrongly twice before landing, which is worth keeping.**
+It first claimed bootable `RUN` steps had no network at all — a misreading of
+`net: None` in the micro-VM spec, which means "no pre-built `TapNet`", not "no
+NIC". A module-survey agent had reported the real version (*"no umf-networking
+egress and no SSRF policy"*) and it was refuted here on those wrong grounds.
+The refutation was the error, not the finding. A refutation needs the same
+standard of evidence as a finding.
 
-**The actual gap.** Bootable `RUN` egress is not policed. Both container paths
-enforce the default-deny SSRF set — the rootful path turns the policy into a
-`forward`-hook drop set (`crates/umf-networking/src/lib.rs:231`), the rootless
-path checks each connect in the smoltcp gateway — while the micro-VM reaches
-the network through the VMM's own user-mode stack, which UMF does not program.
-So a bootable `RUN` can reach host services, the cloud-metadata endpoint and
-the local network, and `--rootless-net-allow` has no effect on it.
+**Privilege.** `CAP_NET_ADMIN` is now required for a bootable build's `RUN`
+steps, by decision rather than by accident. There is deliberately no unpoliced
+fallback: a build that cannot create the namespace fails with an actionable
+error. A fallback would make the guarantee depend on how the build was
+launched, which is the same as not having one. Bootable builds with no `RUN`
+steps, and all container builds, are unaffected.
 
-**Done so far:** the specification's closing claim (*"outbound egress from a RUN
-step is namespaced, and host-internal destinations are denied by default"*) was
-false for this shape and now scopes itself to container builds; the limitation
-is documented; and `umf build` warns once per run when it applies, so an
-operator is not silently unprotected.
+**Shape of the change:**
 
-**Enforcement is still open**, and deliberately not bundled with the above. The
-design is worked out:
+- `umf-networking` gained `VmNet::setup_policed_egress`, reusing the existing
+  netns / veth / bridge / tap plumbing and swapping the DNAT ruleset for the
+  masquerade + deny-set one. The deny set is installed through the same
+  in-crate function the rootful container path calls, so a change to the
+  container policy cannot silently leave the VM path on the old one.
+- The QEMU backend now honours `spec.net` — it previously ignored it entirely —
+  attaching `-netdev tap` and `setns`-ing the forked child into the namespace
+  before exec, mirroring what Cloud Hypervisor already did.
+- The generated run initramfs configures the NIC statically from a staged
+  `.umf-net` rather than running DHCP, so the path needs no daemon in the
+  namespace. DHCP remains the fallback for the user-mode-stack shape.
+- DNS needed handling: switching off the user-mode stack removes QEMU's
+  built-in resolver, so the guest borrows the host's nameservers (loopback
+  stubs filtered). The resolver is **bind-mounted** over the rootfs copy rather
+  than written, because a plain write would go through the 9p share and bake
+  the build host's resolver into the image layer.
 
-- The micro-VM needs a netns + tap whose `forward` hook carries the same
-  `deny_cidrs` set `ContainerNet` already builds from the policy, plus a
-  masquerade for outbound. `VmNet` has the netns/veth/bridge/tap half but does
-  DNAT only — no masquerade, no deny chain — so this is a new composition of
-  existing pieces rather than new primitives.
-- The QEMU backend must honour `spec.net`, which it currently ignores entirely
-  (Cloud Hypervisor already honours it: tap + `setns` before exec).
-- There is a privilege trade-off to settle first. A tap needs `CAP_NET_ADMIN`,
-  which a bootable build does not otherwise require — KVM needs group access to
-  `/dev/kvm`, not root. Enforcing unconditionally would regress unprivileged
-  bootable builds; falling back to the unpoliced stack makes the guarantee
-  privilege-dependent, which is what the container path already does but should
-  be a conscious choice rather than an accident.
+**Verification, and its limit.** The networking primitive is covered by a smoke
+that reads the ruleset back from `nft` and asserts every denied CIDR is present
+(with a guard that the policy is non-empty, so the assertion cannot pass
+vacuously), plus teardown leak checks. The argv wiring and the generated init
+script are unit-tested, including `sh -n` on the init.
 
-**Two things block starting it**, and both are worth stating plainly:
-
-1. The privilege question above is a policy call, not an implementation detail.
-2. **Nothing can verify it.** No CI lane runs a bootable `RUN` step at all — the
-   boot-smoke lane compiles and boots a disk but executes no build-time `RUN` —
-   so a tap + nft egress path would ship untested. That is precisely how the
-   VmNet smoke came to be broken and invisible (#32). A lane that exercises a
-   bootable `RUN` should land before, or with, the enforcement.
+What is still **not** covered is an end-to-end bootable `RUN` that actually
+sends a packet — no CI lane runs a bootable `RUN` step at all (boot-smoke
+compiles and boots a disk but executes none). That lane remains the missing
+piece, and it is the one that would catch an integration-level mistake in this
+change. Tracked with the other coverage gaps in P2.
 
 ### P0.3 — Parser rejects and silently mangles ordinary Docker-compatible input · ~~broken~~ fixed
 

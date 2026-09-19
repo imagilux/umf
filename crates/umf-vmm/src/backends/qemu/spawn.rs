@@ -4,8 +4,18 @@
 //! the `qapi` crate). This module owns the argv assembly + the subprocess
 //! lifecycle bring-up; the trait impl in [`super`] handles control.
 
+// A caller-supplied tap network is entered by `setns`-ing the forked child
+// before exec (a `pre_exec` hook on a borrowed raw fd) — the same two
+// irreducibly-unsafe operations the cloud-hypervisor backend justifies, and
+// which the workspace otherwise bans. Each carries a `SAFETY` note below.
+#![allow(unsafe_code)]
+
+use std::os::fd::BorrowedFd;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
+
+use nix::sched::{CloneFlags, setns};
 
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -50,7 +60,31 @@ pub async fn spawn_qemu(binary: &str, spec: &VmSpec) -> Result<VmHandle, VmError
     let args = build_qemu_args(&spec, qmp_socket.as_deref(), &id);
     debug!(?args, "umf-vmm: qemu argv");
 
-    let mut cmd = Command::new(binary);
+    // When the caller pre-built a tap network, launch QEMU inside that netns so
+    // it can open the tap — the native equivalent of `ip netns exec`. Only the
+    // network namespace is entered, so the QMP socket path and the 9p share
+    // stay on the shared filesystem.
+    let mut cmd = match &spec.net {
+        Some(net) => {
+            let netns_fd = net.netns_fd;
+            let mut std_cmd = std::process::Command::new(binary);
+            // SAFETY: the closure runs in the forked child between fork and
+            // exec, so it must be async-signal-safe: it only calls `setns` (a
+            // bare syscall) on a raw fd the caller's `umf-networking` guard
+            // keeps open for the child's lifetime — no allocation, no locks.
+            unsafe {
+                std_cmd.pre_exec(move || {
+                    // SAFETY: `netns_fd` is valid for the child's lifetime;
+                    // `borrow_raw` only wraps it for the `setns` call.
+                    let ns = BorrowedFd::borrow_raw(netns_fd);
+                    setns(ns, CloneFlags::CLONE_NEWNET).map_err(std::io::Error::from)?;
+                    Ok(())
+                });
+            }
+            Command::from(std_cmd)
+        }
+        None => Command::new(binary),
+    };
     cmd.args(&args);
     cmd.stdin(Stdio::null());
     // Route stdout/stderr per the serial mode. Never *pipe* them: nothing
@@ -277,14 +311,34 @@ pub(crate) fn build_qemu_args(spec: &VmSpec, qmp_socket: Option<&Path>, id: &str
         ));
     }
 
-    // User-mode networking. One -netdev with all hostfwd specs collapsed
-    // into the same comma-list; virtio-net-pci attaches it to the guest.
-    let mut netdev = String::from("user,id=net0");
-    for pf in &spec.port_forwards {
-        netdev.push_str(&format_hostfwd(*pf));
+    // Networking. A caller-supplied tap wins over the user-mode stack.
+    //
+    // The distinction is not cosmetic: the user-mode stack is QEMU's own, and
+    // UMF cannot program it — a `RUN` step egressing through it obeys no SSRF
+    // policy. A tap sits in a namespace whose `forward` hook carries the
+    // default-deny set, which is how a bootable build's RUN gets the same
+    // treatment as a container's. `script=no,downscript=no` because the device
+    // is created and torn down by `umf-networking`, not by QEMU.
+    match &spec.net {
+        Some(net) => {
+            args.push("-netdev".into());
+            args.push(format!(
+                "tap,id=net0,ifname={},script=no,downscript=no",
+                net.tap
+            ));
+        }
+        None => {
+            // One -netdev with all hostfwd specs collapsed into the same
+            // comma-list. Port forwards are a user-mode-stack feature; with a
+            // tap the caller owns DNAT instead.
+            let mut netdev = String::from("user,id=net0");
+            for pf in &spec.port_forwards {
+                netdev.push_str(&format_hostfwd(*pf));
+            }
+            args.push("-netdev".into());
+            args.push(netdev);
+        }
     }
-    args.push("-netdev".into());
-    args.push(netdev);
     args.push("-device".into());
     args.push("virtio-net-pci,netdev=net0".into());
 

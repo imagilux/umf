@@ -109,6 +109,12 @@ impl VmIpPlan {
     pub(crate) fn host_veth(self) -> Ipv4Addr {
         self.addr(6)
     }
+
+    /// The block in CIDR form (`10.70.0.8/29`), for the masquerade rule's
+    /// `ip saddr` match.
+    pub(crate) fn cidr(self) -> String {
+        format!("{}/{}", self.addr(0), Self::PREFIX)
+    }
 }
 
 /// The nft DNAT + forward ruleset for the VM's port-forwards: a `prerouting`
@@ -200,6 +206,8 @@ pub struct VmNet {
     host_veth: String,
     nft_table: String,
     guest_ip: Ipv4Addr,
+    /// The guest's default gateway (the host veth address).
+    gateway: Ipv4Addr,
     /// The DHCP daemon child (dnsmasq by default, or a `--dhcp-command`
     /// daemon) when one was launched; killed on teardown.
     dhcp_child: Option<Child>,
@@ -228,9 +236,9 @@ impl VmNet {
         // rtnetlink steps below build a `current_thread` runtime, which panics
         // if started from within the caller's `#[tokio::main]` worker. (Same
         // rationale as `ContainerNet::setup`.)
-        let forwards = port_forwards.to_vec();
+        let purpose = NetPurpose::PortForward(port_forwards.to_vec());
         let dhcp = dhcp.clone();
-        run_off_runtime(move || setup_inner(id, &forwards, &dhcp))
+        run_off_runtime(move || setup_inner(id, &purpose, &dhcp))
     }
 
     /// Name of the tap device cloud-hypervisor should attach (`NetConfig.tap`).
@@ -248,6 +256,43 @@ impl VmNet {
         self.netns.as_raw_fd()
     }
 
+    /// Set up a **policed egress** network for a build micro-VM: the same
+    /// netns + veth + bridge + tap plumbing as [`Self::setup`], but the host
+    /// table masquerades the block outbound and terminally drops `policy`'s
+    /// denied destinations instead of DNAT-ing ports inward.
+    ///
+    /// This is what makes a bootable build's `RUN` step obey the same
+    /// default-deny SSRF set a container `RUN` obeys. Without it the micro-VM
+    /// falls back to the VMM's own user-mode stack, which UMF does not program
+    /// and which enforces nothing.
+    ///
+    /// No DHCP daemon is launched — the build's guest is configured statically
+    /// from [`Self::guest_ip`] / [`Self::gateway`] / [`Self::netmask`], so the
+    /// path has no external `dnsmasq` dependency.
+    ///
+    /// # Errors
+    /// [`NetError`] if the namespace, the links or the ruleset fail to come
+    /// up. Requires `CAP_NET_ADMIN`.
+    pub fn setup_policed_egress(
+        id: u32,
+        policy: crate::ssrf::EgressPolicy,
+    ) -> Result<Self, NetError> {
+        let purpose = NetPurpose::PolicedEgress(policy);
+        run_off_runtime(move || setup_inner(id, &purpose, &DhcpDaemon::None))
+    }
+
+    /// The guest's default gateway — the host end of the veth pair.
+    #[must_use]
+    pub fn gateway(&self) -> Ipv4Addr {
+        self.gateway
+    }
+
+    /// Netmask of the per-VM block, dotted form.
+    #[must_use]
+    pub fn netmask(&self) -> &'static str {
+        VmIpPlan::MASK
+    }
+
     /// The address the guest is leased (the DNAT target).
     #[must_use]
     pub fn guest_ip(&self) -> Ipv4Addr {
@@ -256,11 +301,18 @@ impl VmNet {
 }
 
 /// Body of [`VmNet::setup`], run on a runtime-free thread.
-fn setup_inner(
-    id: u32,
-    port_forwards: &[PortForward],
-    dhcp: &DhcpDaemon,
-) -> Result<VmNet, NetError> {
+/// What the host-side nft table does for this VM — the one thing that differs
+/// between the two callers of the shared plumbing below.
+enum NetPurpose {
+    /// Inbound DNAT port-forwarding (`umf run --vmm=ch -p`).
+    PortForward(Vec<PortForward>),
+    /// Outbound egress with the SSRF default-deny set applied — the
+    /// bootable-build micro-VM `RUN` path. Same `deny_cidrs` the rootful
+    /// container path installs, so both build shapes police the same set.
+    PolicedEgress(crate::ssrf::EgressPolicy),
+}
+
+fn setup_inner(id: u32, purpose: &NetPurpose, dhcp: &DhcpDaemon) -> Result<VmNet, NetError> {
     let plan = VmIpPlan::for_id(id);
     let host_veth = format!("vmh{id}");
     let ctr_veth = format!("vmc{id}");
@@ -295,8 +347,19 @@ fn setup_inner(
         ))?;
         // Netns side: bridge + tap, enslave the peer + tap, address + raise.
         configure_netns_side(netns.as_raw_fd(), &ctr_veth, &bridge, &tap, plan)?;
-        // Host: the DNAT/forward ruleset.
-        nft_apply(&vmfwd_ruleset(&nft_table, plan, port_forwards))?;
+        // Host: the ruleset this VM's table exists for.
+        match purpose {
+            NetPurpose::PortForward(forwards) => {
+                nft_apply(&vmfwd_ruleset(&nft_table, plan, forwards))?;
+            }
+            NetPurpose::PolicedEgress(policy) => {
+                // Masquerade the block outbound, and terminally drop the
+                // policy's denied destinations on the `forward` hook — the
+                // identical construction `ContainerNet` uses for a rootful
+                // container RUN, so a bootable RUN is policed the same way.
+                crate::apply_masquerade(&nft_table, &plan.cidr(), &policy.denied_v4_cidrs())?;
+            }
+        }
         Ok(())
     })();
 
@@ -317,6 +380,7 @@ fn setup_inner(
         host_veth,
         nft_table,
         guest_ip: plan.guest(),
+        gateway: plan.host_veth(),
         dhcp_child,
         prior_ip_forward: prior_forward,
         netns,

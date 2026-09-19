@@ -409,3 +409,33 @@ fn a_micro_vm_spec_with_no_tapnet_still_gets_a_nic() {
         "the netdev must be attached to a guest NIC: {joined}"
     );
 }
+
+/// A caller-supplied tap replaces the user-mode stack entirely.
+///
+/// This is the difference between a policed and an unpoliced `RUN`: the
+/// user-mode stack is QEMU's own and UMF cannot program it, whereas a tap sits
+/// in a namespace whose `forward` hook carries the SSRF default-deny set.
+#[test]
+fn a_prebuilt_tap_replaces_user_mode_networking() {
+    use crate::runtime::TapNet;
+    let mut spec = base_spec();
+    spec.net = Some(TapNet {
+        netns_fd: 7,
+        tap: "umftap60344".into(),
+    });
+
+    let args = build_qemu_args(&spec, None, "policed");
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("-netdev tap,id=net0,ifname=umftap60344,script=no,downscript=no"),
+        "the tap must be attached: {joined}"
+    );
+    assert!(
+        !joined.contains("-netdev user"),
+        "the unpoliced user-mode stack must NOT also be attached: {joined}"
+    );
+    assert!(
+        joined.contains("virtio-net-pci,netdev=net0"),
+        "the guest NIC must bind the tap netdev: {joined}"
+    );
+}

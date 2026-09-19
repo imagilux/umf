@@ -77,6 +77,24 @@ pub enum RunStepError {
     #[error("guest wrote a malformed exit code: {0:?}")]
     MalformedExitCode(String),
 
+    /// The policed-egress network for the micro-VM could not be built.
+    ///
+    /// A bootable `RUN` step egresses through a tap in a namespace whose
+    /// `forward` hook carries the SSRF default-deny set — the same set a
+    /// container `RUN` obeys. Building that needs `CAP_NET_ADMIN`. Falling
+    /// back to the VMM's own user-mode stack is deliberately *not* an option:
+    /// that stack enforces nothing, so a silent fallback would turn a
+    /// documented guarantee into one that quietly depends on how the build was
+    /// launched.
+    #[error(
+        "setting up policed egress for the RUN micro-VM: {0}\n\
+         a bootable build's RUN steps egress through a tap whose namespace \
+         enforces the default-deny SSRF policy, which needs CAP_NET_ADMIN \
+         (run as root, or grant the capability). There is no unpoliced \
+         fallback by design."
+    )]
+    Egress(#[source] umf_networking::NetError),
+
     /// Initramfs generation for this RUN step failed.
     #[error("initrd: {0}")]
     Initrd(#[from] InitrdError),
@@ -283,7 +301,6 @@ pub async fn run_step_vm(
         kvm = config.kvm_available,
         "vm_runner: starting RUN step",
     );
-    warn_unpoliced_egress();
 
     // 1. Stage the helper files so the guest's init can read them.
     let cmd_path = staging.path().join(".umf-cmd");
@@ -321,6 +338,35 @@ pub async fn run_step_vm(
     // micro-VM gets `-machine virt` + `console=ttyAMA0` rather than x86
     // `q35` + `ttyS0` (the wrong console yields empty serial capture).
     let vm_arch = arch_from_qemu_path(&config.qemu_path);
+
+    // Policed egress. The micro-VM attaches a tap in a namespace whose
+    // `forward` hook carries the SSRF default-deny set, so a bootable `RUN`
+    // obeys the same policy a container `RUN` does. Previously this path used
+    // the VMM's own user-mode stack, which UMF does not program and which
+    // enforces nothing — host services, cloud metadata and the local network
+    // were all reachable from a build step.
+    //
+    // The guard is held for the VM's lifetime and torn down with it; the id is
+    // derived from the pid so concurrent builds get disjoint /29 blocks.
+    let net_id = std::process::id();
+    let vm_net =
+        umf_networking::VmNet::setup_policed_egress(net_id, umf_engine::rootless::egress_policy())
+            .map_err(RunStepError::Egress)?;
+
+    // Hand the guest its address statically: the tap path runs no DHCP server,
+    // and a static config needs no daemon in the namespace. The resolver comes
+    // from the host — with a tap there is no user-mode stack to provide one.
+    std::fs::write(
+        staging.path().join(".umf-net"),
+        format!(
+            "UMF_IP={}\nUMF_GW={}\nUMF_MASK={}\nUMF_PREFIX=29\nUMF_DNS=\"{}\"\n",
+            vm_net.guest_ip(),
+            vm_net.gateway(),
+            vm_net.netmask(),
+            host_nameservers().join(" "),
+        ),
+    )?;
+
     let spec = VmSpec {
         arch: vm_arch,
         boot: BootSource::DirectKernel {
@@ -333,7 +379,10 @@ pub async fn run_step_vm(
         kvm: config.kvm_available,
         display: DisplayMode::None,
         port_forwards: Vec::new(),
-        net: None,
+        net: Some(umf_vmm::TapNet {
+            netns_fd: vm_net.netns_raw_fd(),
+            tap: vm_net.tap_name().to_string(),
+        }),
         control: ControlMode::None,
         shares: vec![NinePShare {
             host_path: staging.path().to_path_buf(),
@@ -415,32 +464,27 @@ fn arch_from_qemu_path(qemu_path: &std::path::Path) -> VmArch {
     }
 }
 
-/// Warn once per process that a bootable build's `RUN` steps egress without the
-/// SSRF policy applied.
+/// The host's nameservers, for the guest's `/etc/resolv.conf`.
 ///
-/// A container `RUN` step is policed either way: the rootful path turns the
-/// policy into a `forward`-hook drop set on its NAT table, and the rootless
-/// path checks each connect in the userspace stack. A bootable `RUN` step runs
-/// in a micro-VM whose NIC is the VMM's own user-mode network stack
-/// (`-netdev user`), which UMF does not program — so the default-deny set does
-/// not apply, and `--rootless-net-allow` has no effect on it.
-///
-/// This is a real difference in security posture between the two build shapes,
-/// so it is said out loud rather than left to the documentation. Emitted once
-/// per process, not per step: a recipe with fifteen `RUN` directives should not
-/// produce fifteen copies of the same warning.
-fn warn_unpoliced_egress() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        warn!(
-            "bootable RUN steps reach the network through the VMM's user-mode \
-             stack, so the default-deny SSRF policy is NOT enforced for them \
-             (host services, cloud metadata and the local network are \
-             reachable, and --rootless-net-allow does not apply). Container \
-             builds are unaffected. Block what must stay unreachable at the \
-             host firewall, or build on a host with no route to it."
-        );
-    });
+/// With a tap there is no VMM user-mode stack to answer DNS, so the guest
+/// borrows the host's resolvers. A loopback stub (systemd-resolved's
+/// `127.0.0.53`) is filtered out: it is unreachable from the guest's namespace
+/// and the SSRF policy denies loopback anyway, so passing it through would
+/// produce a resolver that silently never answers. This is the same caveat the
+/// rootless `native` container backend documents.
+fn host_nameservers() -> Vec<String> {
+    let Ok(conf) = std::fs::read_to_string("/etc/resolv.conf") else {
+        return Vec::new();
+    };
+    conf.lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .filter(|_| l.starts_with("nameserver"))
+        })
+        .filter(|ns| !ns.starts_with("127."))
+        .map(str::to_string)
+        .collect()
 }
 
 fn short_command(cmd: &str) -> String {
