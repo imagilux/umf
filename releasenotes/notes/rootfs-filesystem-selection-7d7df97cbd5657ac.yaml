@@ -1,0 +1,45 @@
+---
+features:
+  - |
+    ``umf compile --fs <squashfs|ext4|erofs>`` selects the root filesystem
+    written into the ROOTFS partition. The default remains ``squashfs``.
+
+    The filesystem is a property of the **disk**, not of the image: a bootable
+    image's layers are byte-identical whichever one is written, so the same
+    image now projects to any of the three. The choice therefore belongs to
+    projection, alongside disk geometry, and the recipe has no say — the
+    ``org.imagilux.umf.rootfs.fs`` label survives as the *default* for
+    projection, so images built before this flag existed project exactly as
+    they did before.
+
+    ``squashfs`` is written in-process, so a plain ``umf compile`` still needs
+    nothing installed. ``ext4`` and ``erofs`` shell out to ``mkfs.ext4``
+    (``e2fsprogs``) and ``mkfs.erofs`` (``erofs-utils``); neither format has a
+    mature pure-Rust writer. There is deliberately no fallback — a root the
+    operator asked to be ext4 must not be silently written as something else —
+    so a missing tool is an error naming the package. Both tools run
+    unprivileged and preserve ownership, modes and device nodes.
+upgrade:
+  - |
+    The generated initramfs no longer names a root filesystem. It reads
+    ``rootfstype=`` back from ``/proc/cmdline`` (as it already read ``root=``
+    for the device) and carries drivers for squashfs, ext4 and erofs. Existing
+    bootable images are unaffected until rebuilt: ``umf compile`` writes the
+    same ``rootfstype=`` it always did unless ``--fs`` says otherwise.
+
+    An image whose ``rootfs.fs`` label names a filesystem UMF cannot write is
+    now rejected by name rather than by "anything other than squashfs", and the
+    error offers ``--fs`` as the override.
+fixes:
+  - |
+    The ``--fs`` selection is part of the block-cache key. Without it,
+    ``umf compile --fs ext4`` following a plain compile of the same image would
+    have been served the previously cached **squashfs** disk — a silently wrong
+    artifact rather than a cache miss.
+  - |
+    The reported size of a squashfs root partition was read from the output
+    stream's position after the write, which ``backhand`` leaves ~96 bytes in
+    regardless of the real image size because it seeks back to offset 0 to lay
+    down the superblock last. Any size check against it always passed and any
+    size logged from it was wrong; the writer now tracks the furthest offset
+    written.

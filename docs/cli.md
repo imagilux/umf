@@ -80,7 +80,7 @@ umf build --tag local/appliance:1.0 .                # bootable (FROM a kernel) 
 
 `umf compile [OPTIONS] <REFERENCE>`
 
-Project a bootable-OS image (`type=bootable`) into a bootable **disk**. `build` produces the relocatable object (the OCI image); `compile` links it into a target-specific executable (the disk) — reading the image's boot manifest (`org.imagilux.umf.*` labels) to lay down GPT + ESP, a classic bootloader entry or a UKI, and the squashfs rootfs. The image is the only input — no recipe, no second resolution — and must already be in the layout (`umf build` or `umf pull` it first).
+Project a bootable-OS image (`type=bootable`) into a bootable **disk**. `build` produces the relocatable object (the OCI image); `compile` links it into a target-specific executable (the disk) — reading the image's boot manifest (`org.imagilux.umf.*` labels) to lay down GPT + ESP, a classic bootloader entry or a UKI, and the root filesystem. The image is the only input — no recipe, no second resolution — and must already be in the layout (`umf build` or `umf pull` it first).
 
 The disk is **local-only**: never an OCI artifact, never pushed.
 
@@ -89,12 +89,28 @@ The disk is **local-only**: never an OCI artifact, never pushed.
 | `-o, --output <PATH>` | Write the raw disk here. Omit to write a content-addressed sidecar in the layout's block cache (a repeat compile is then a cache hit). |
 | `--disk-size <BYTES>` | Total disk image size. Default 2 GiB (sparse). |
 | `--esp-size <BYTES>` | EFI System Partition size. Default 500 MiB (per spec). |
+| `--fs <FS>` | Root filesystem: `squashfs` (default), `ext4`, `erofs`. Overrides the image's `org.imagilux.umf.rootfs.fs` label. |
+
+#### Root filesystem (`--fs`)
+
+The root filesystem is a property of the **disk**, not of the image: the layers are byte-identical whichever one is written, so the same bootable image projects to any of them. The recipe has no say — this is a projection choice, like disk geometry. With no flag, the image's `rootfs.fs` label is used, and failing that `squashfs`.
+
+| Value | Properties | Needs on the host |
+|-------|------------|-------------------|
+| `squashfs` (default) | read-only, compressed | nothing — written in-process |
+| `erofs` | read-only, compressed, faster random access | `mkfs.erofs` (`erofs-utils`) |
+| `ext4` | read-write, uncompressed | `mkfs.ext4` (`e2fsprogs`) |
+
+The default needs no tooling, so a plain `umf compile` still runs on a node with nothing installed. The other two shell out — neither format has a mature pure-Rust writer — and there is **no fallback**: if the tool is missing, the projection fails naming the package rather than writing a filesystem you did not ask for. Both `mkfs` tools run unprivileged and preserve ownership, modes and device nodes.
+
+`--fs` is part of the block-cache key, so switching filesystems re-projects instead of returning the previously cached disk.
 
 For the classic flavor, the `systemd-boot` `.efi` is read from inside the image rootfs (`/usr/lib/systemd/boot/efi/<arch>.efi`): in-image only, no host fallback and no override flag. A classic-flavor image that ships no bootloader is an error (switch to `flavor=uki`, or install systemd-boot into the rootfs). `flavor=uki` needs no bootloader (ukify wraps the kernel).
 
 ```bash
 umf compile local/appliance:1.0 -o ./disk.raw   # raw disk to a file
 umf compile local/appliance:1.0                  # into the block cache (for `umf run`)
+umf compile local/appliance:1.0 --fs ext4 -o ./disk.raw   # writable ext4 root
 ```
 
 ## Running

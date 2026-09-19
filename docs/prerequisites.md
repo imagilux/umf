@@ -108,7 +108,8 @@ Not required for any build; it only makes **warm** rebuilds faster.
 
 | Item | Why | Debian / Ubuntu | Fedora |
 |------|-----|------------------|--------|
-| **`mkfs.erofs`** (from `erofs-utils`) | When present, UMF encodes cached lower layers as erofs images for a faster warm-rebuild overlay. Absent, a pure-Rust unpack is used instead, so it is never required and `umf doctor` does not gate on it. | `sudo apt-get install -y erofs-utils` | `sudo dnf install -y erofs-utils` |
+| **`mkfs.erofs`** (from `erofs-utils`) | Two independent uses. (1) Cached lower layers are encoded as erofs for a faster warm-rebuild overlay — optional, with a pure-Rust unpack fallback. (2) `umf compile --fs erofs` writes an erofs root partition — **required** for that flag, with no fallback. | `sudo apt-get install -y erofs-utils` | `sudo dnf install -y erofs-utils` |
+| **`mkfs.ext4`** (from `e2fsprogs`) | Required by `umf compile --fs ext4`, with no fallback. Usually already installed. Not needed for the default `squashfs` root, which UMF writes in-process. | `sudo apt-get install -y e2fsprogs` | `sudo dnf install -y e2fsprogs` |
 
 ## At a glance
 
