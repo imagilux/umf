@@ -28,33 +28,47 @@ These are the items where the specification, the design pillars or the CLI's
 own help text describe behaviour the binary does not deliver. They rank above
 everything else because each one makes a written promise false.
 
-### P0.1 — Sovereignty: the source-build rung does not exist · absent · [#30](https://github.com/imagilux/umf/issues/30)
+### P0.1 — Sovereignty: ~~the source-build rung does not exist~~ · not a gap · [#30](https://github.com/imagilux/umf/issues/30)
 
-Design pillar 3 states that *any artifact is buildable from source on an
-air-gapped node; registries and caches accelerate but are never required*. The
-resolver's own module header advertises `registry → local cache → source build`.
+**Closed as a documentation error, not implemented.** This item claimed a
+missing third resolution rung. There is no such rung and there was never meant
+to be one — the specification, `CLAUDE.md` and the resolver's own module header
+all described a `registry → cache → source build` chain that misstated the
+pillar, and this roadmap built a P0 on top of that description.
 
-There is no source-build rung. `Provenance` has exactly three variants —
-`Override`, `Registry`, `Cache` (`crates/umf-builder/src/resolver/mod.rs:53`) —
-and a tree-wide search for `SourceBuild`, `source_build` or `build_missing`
-returns nothing. An internal comment already contradicts the module header,
-describing the ladder as `override → cache → registry`.
+**What the pillar actually means**, per the maintainer: a *build* never
+requires a registry. Every component — kernels, bootloaders, build
+environments — is itself an artifact produced by an ordinary `umf build` from
+its own recipe, and a build's output lands in the local cache. An air-gapped
+operator therefore builds components in dependency order, each resolving the
+previous from cache, contacting nothing. A registry is where finished artifacts
+get published and where other nodes retrieve them — an accelerator and a
+distribution mechanism, never a precondition.
 
-Everything else on this page is a bounded gap inside a component. This is a
-pillar the product does not stand on, and it is the item that decides whether
-UMF is what it claims to be.
+**What UMF deliberately does not do** is fetch or build a component's *sources*
+on the author's behalf. Where those live is the author's concern, not the
+format's. A reference that is neither cached nor retrievable is an error, even
+offline — not a trigger for an implicit build. An automatic source build would
+turn a typo in a reference into a multi-hour compile, and would require UMF to
+know where every component's sources are.
 
-**Blocked on design input**, not on effort. Three questions have to be answered
-before any code is worth writing:
+The implementation always matched this. `crates/umf-builder/tests/air_gapped_container_build.rs`
+has asserted exactly it since before this item was written: *"an air-gapped
+node, given a pre-populated layout, can build new images from the cached
+components alone."* The `Provenance` enum having three variants —
+`Override | Registry | Cache` — was correct, not incomplete.
 
-1. Where is a component's source recipe declared — a label on the artifact, a
-   convention in the registry namespace, or an operator-supplied manifest?
-2. How is recursion bounded? A kernel artifact is itself a UMF build that
-   `FROM`s a kernel-build-env, which is itself a UMF build. Depth limit, cycle
-   detection, or both?
-3. Opt-in or automatic? An automatic source build turns a typo in a reference
-   into a multi-hour compile; an explicit `--build-missing` keeps the failure
-   fast but means the air-gapped case needs a flag.
+Corrected in the spec's **Artifact Resolution** section (now `local cache →
+registry`), both affected design pillars in `CLAUDE.md`, the resolver module
+header, the `resolve_add` / `resolve_from_kernel` doc comments, and
+`docs/examples.md`.
+
+**The one real requirement this leaves** is that an unresolvable reference fail
+*properly*. The exit code is already correct (`1`), but the message is not:
+a registry transport failure renders as `OCI distribution: error sending
+request for url (…)` with no cause, because `reqwest::Error`'s `Display` drops
+its source chain. Offline, an operator gets no indication that DNS or the
+network is the problem. Tracked as P1.5 below.
 
 ### P0.2 — The SSRF policy did not cover a bootable build's `RUN` · ~~partial~~ fixed
 
@@ -204,6 +218,28 @@ deliberately with a **`uki`** flavor and an **appliance** entrypoint, because a
 `systemd-boot` base would make "inherited" and "silently re-defaulted"
 indistinguishable and the assertion vacuous. Both inheritance paths were
 confirmed to fail the test when broken.
+
+### P1.5 — A registry transport failure does not say why · partial · unfiled
+
+An unresolvable reference correctly fails with exit `1`, but the message loses
+the cause:
+
+```
+error: build: OCI distribution: error sending request for url (https://example.invalid/v2/nope/manifests/1)
+```
+
+`reqwest::Error`'s `Display` is cause-less, so `RegistryError::Distribution`
+renders the request without the DNS failure, refused connection or TLS error
+underneath it. Offline — the case the sovereignty pillar is about — an operator
+sees a URL and no reason.
+
+The same flattening already caused a real bug once: `is_pull_environmental` in
+the CLI acceptance test could not classify transport failures because none of
+its substrings appear in that Display (fixed in #52 by matching the reqwest
+phrasing directly, which is a workaround rather than a fix).
+
+Walking `std::error::Error::source()` when formatting a registry error would
+surface the cause. Bounded and self-contained.
 
 ### P1.3 — `ext4` / `erofs` root partitions · absent · documented
 

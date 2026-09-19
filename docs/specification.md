@@ -26,13 +26,17 @@ Container builds skip L1–L3 (and L0) entirely: `FROM <image>` (or `FROM scratc
 
 ## Artifact Resolution
 
-Every reference to an OCI artifact — `FROM`, `ADD <oci-ref>` — follows the same resolution chain:
+Every reference to an OCI artifact — `FROM`, `ADD <oci-ref>` — resolves the same way:
 
 ```
-Registry lookup → Local cache → Build from source
+Local cache → Registry
 ```
 
-This means any UMF file can bootstrap on a fully air-gapped, single-node setup — you pay the build-time penalty once, then artifacts are cached locally. Stand up a local registry and other nodes pull from it. Federate registries across sites for a full supply chain. Entry at any point in the chain works.
+The cache is consulted first, so a reference already present resolves with no network access at all. A reference that is neither cached nor retrievable is an **error**: UMF does not fetch, guess at, or build a component's sources on the author's behalf. Where a component's sources live is the author's concern, not the format's.
+
+**How this satisfies sovereignty.** The pillar is that a *build* requires no registry, not that UMF will manufacture a missing dependency. Every component — kernels, bootloaders, build environments — is itself an artifact produced by an ordinary `umf build` from its own recipe, and a build's output lands in the local cache. So an operator on an air-gapped node builds each component in dependency order, each one resolving the previous from cache, and never contacts a registry. A registry, when one is reachable, is where finished artifacts are *published* and where other nodes retrieve them from — an accelerator and a distribution mechanism, never a precondition.
+
+That is a workflow the operator drives explicitly, not a fallback rung inside resolution. The distinction matters: an automatic source build would turn a typo in a reference into a multi-hour compile, and would require UMF to know where every component's sources are — which it deliberately does not.
 
 ## L0 Introspection
 

@@ -1,6 +1,6 @@
 # Examples
 
-End-to-end workflows showing how UMF builds compose. Each component (kernel, rootfs, bootloader) is itself an OCI artifact produced by a UMF build, so the same DSL and the same `registry → cache → source build` resolution chain apply at every level.
+End-to-end workflows showing how UMF builds compose. Each component (kernel, rootfs, bootloader) is itself an OCI artifact produced by a UMF build, so the same DSL and the same `local cache → registry` resolution apply at every level.
 
 The workflows below follow that progression: build the components, then assemble them into final artifacts for each target.
 
@@ -182,7 +182,9 @@ EXPOSE 80/tcp
 
 ## Air-gapped operation
 
-UMF builds resolve every `FROM` and `ADD <oci-ref>` reference through a uniform `registry → local cache → source build` chain. When the local cache is populated, no remote registry is contacted — which is the principle behind the [sovereignty-first pillar](index.md): an air-gapped node, given a pre-populated layout, can build new images from cached components alone.
+UMF builds resolve every `FROM` and `ADD <oci-ref>` reference the same way: **local cache first, then a registry**. When the cache is populated no remote registry is contacted at all — which is the principle behind the [sovereignty-first pillar](index.md): an air-gapped node, given a pre-populated layout, builds new images from cached components alone.
+
+There is no automatic source-build rung. A reference that is neither cached nor retrievable fails with an error; each component is produced by its own `umf build`, whose output lands in the cache for the next build to find.
 
 ### Pre-warming a layout from a connected node
 

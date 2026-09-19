@@ -1,0 +1,35 @@
+---
+upgrade:
+  - |
+    **Corrected documentation, not behaviour.** The specification's *Artifact
+    Resolution* section described the chain as
+    ``Registry lookup → Local cache → Build from source``. There is no
+    source-build rung, there was never meant to be one, and nothing about how
+    UMF resolves references has changed. The chain is, and always was,
+    **local cache first, then a registry**.
+    Read the corrected text if you relied on the old wording to plan an
+    air-gapped deployment: the sovereignty guarantee is real, but it works
+    differently than that sentence implied.
+other:
+  - |
+    Clarified what the sovereignty-first pillar means, across the
+    specification, both affected design pillars, the resolver's module header,
+    the ``resolve_add`` / ``resolve_from_kernel`` doc comments and the examples
+    page.
+    A *build* never requires a registry. Every component — kernels,
+    bootloaders, build environments — is itself an artifact produced by an
+    ordinary ``umf build`` from its own recipe, and a build's output lands in
+    the local cache. An air-gapped operator builds components in dependency
+    order, each resolving the previous from cache, contacting nothing. A
+    registry is where finished artifacts are published and where other nodes
+    retrieve them: an accelerator and a distribution mechanism, never a
+    precondition.
+    What UMF deliberately does **not** do is fetch or build a component's
+    *sources* on the author's behalf. Where those live is the author's concern.
+    A reference that is neither cached nor retrievable is an error, even
+    offline — not a trigger for an implicit build. An automatic source build
+    would turn a typo in a reference into a multi-hour compile, and would
+    require UMF to know where every component's sources are.
+    The implementation always matched this; only the documentation did not.
+    ``crates/umf-builder/tests/air_gapped_container_build.rs`` has asserted the
+    real behaviour throughout.
