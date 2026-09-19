@@ -1,0 +1,40 @@
+---
+fixes:
+  - |
+    Directive keywords are usable as ``ENV`` and ``ARG`` names again.
+    ``ENV USER=app`` — about as ordinary as a recipe line gets, and accepted by
+    Docker — failed to parse with *"expected key after ENV"*, and the same
+    applied to every other keyword: ``RUN``, ``ADD``, ``COPY``, ``FROM``,
+    ``LABEL``, ``ENV``, ``CMD``. The lexer classifies the whole keyword set as
+    keywords wherever they appear, and neither key parser accepted one.
+    ``LABEL`` is unaffected and unchanged: its keys follow the OCI reverse-DNS
+    grammar, so ``LABEL USER=x`` is still refused for requiring a lowercase
+    first character, while ``LABEL user=x`` works as it always has.
+  - |
+    ``#`` inside the shell payload of ``RUN`` / ``CMD`` / ``ENTRYPOINT`` is no
+    longer treated as a comment. It opened one anywhere on a line, silently
+    truncating the rest — ``RUN curl http://x/a#frag`` ran
+    ``curl http://x/a``, and an unquoted ``#ff0000`` lost its value — so the
+    build executed a different command than the recipe read.
+    A trailing comment on a *structured* directive (``FROM scratch # note``) is
+    still stripped, which Dockerfile itself does not allow. Nothing is lost by
+    passing ``#`` through in a payload: an unquoted ``#`` already opens a
+    comment to the shell, so ``RUN foo # note`` behaves exactly as before.
+  - |
+    ``ADD`` and ``COPY`` now refuse options they do not implement instead of
+    discarding them. ``ADD --chown=1000:1000`` and ``ADD --chmod=755`` parsed
+    cleanly and had no effect, so the build succeeded and the image was quietly
+    wrong — the worst possible outcome for a flag whose entire purpose is to
+    change file ownership or mode. Both now fail with a diagnostic pointing at
+    a following ``RUN chown`` / ``RUN chmod`` step.
+    This replaces the previous "drop unrecognised options for forward
+    compatibility" behaviour. Silent forward-compatibility is the wrong trade
+    for any flag that changes the produced image: refusing it is recoverable,
+    shipping the wrong ownership is not. ``ADD --from=<stage>`` is unaffected.
+  - |
+    ``RUN`` now refuses options other than ``--mount`` instead of letting them
+    fall through into the command string. A BuildKit-style
+    ``RUN --network=none echo hi`` executed the literal command
+    ``--network=none echo hi`` and failed at run time with a shell error
+    pointing nowhere near the cause; it now fails at parse time naming the
+    option.

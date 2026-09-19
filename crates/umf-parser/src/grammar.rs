@@ -409,12 +409,21 @@ impl<'a> Parser<'a> {
             "expected argument name after ARG",
             "ARG takes a name with an optional default — e.g. `ARG VERSION=1.0`",
         )?;
-        let TokenKind::Ident(name_text) = name_tok.kind else {
-            self.errors.push(Diagnostic::error(
-                "expected argument name after ARG",
-                Annotation::new(name_tok.span, "expected an identifier"),
-            ));
-            return None;
+        // A directive keyword is a legal build-arg name (`ARG USER=app`); the
+        // lexer classifies the whole keyword set as keywords wherever they
+        // appear, so match ENV's handling and recover the text from the span.
+        let name_text = match name_tok.kind {
+            TokenKind::Ident(s) => s,
+            TokenKind::Keyword(_) => {
+                self.source[name_tok.span.start..name_tok.span.end].to_string()
+            }
+            _ => {
+                self.errors.push(Diagnostic::error(
+                    "expected argument name after ARG",
+                    Annotation::new(name_tok.span, "expected an identifier"),
+                ));
+                return None;
+            }
         };
         let name = self.validated(&name_text, name_tok.span, "ARG", "name", EnvVarName::new)?;
 
@@ -562,7 +571,21 @@ impl<'a> Parser<'a> {
         let mut mounts: Vec<RunMount> = Vec::new();
         while let Some(TokenKind::LongOption { name, .. }) = self.peek_kind() {
             if name != "mount" {
-                break;
+                // These used to `break`, which left the option in the token
+                // stream so it landed inside the shell command string: a
+                // BuildKit-style `RUN --network=none echo hi` ran the literal
+                // command `--network=none echo hi` and failed at execution
+                // time with a shell error pointing nowhere near the cause.
+                let name = name.clone();
+                let span = self.peek().map_or_else(|| self.eof_span(), |t| t.span);
+                self.errors.push(
+                    Diagnostic::error(
+                        format!("unsupported RUN option `--{name}`"),
+                        Annotation::new(span, "not supported"),
+                    )
+                    .with_hint("`RUN` accepts `--mount=type=secret,id=<id>,target=<path>`"),
+                );
+                return None;
             }
             let tok = self.advance()?.clone();
             if let TokenKind::LongOption { value, .. } = tok.kind {
@@ -661,9 +684,32 @@ impl<'a> Parser<'a> {
         let mut from: Option<Spanned<StageName>> = None;
         while let Some(TokenKind::LongOption { .. }) = self.peek_kind() {
             let tok = self.advance()?.clone();
-            if let TokenKind::LongOption { name, value } = tok.kind
-                && name == "from"
-            {
+            if let TokenKind::LongOption { name, value } = tok.kind {
+                if name != "from" {
+                    // Previously any unrecognised option was dropped "for
+                    // forward compatibility". That is the wrong trade for a
+                    // flag that changes the produced image: `ADD --chown=…`
+                    // and `--chmod=…` parsed clean and did nothing, so the
+                    // build succeeded and the image was quietly wrong. A flag
+                    // that alters output must never be silently ignored —
+                    // refusing it is recoverable, shipping the wrong ownership
+                    // is not.
+                    let hint = match name.as_str() {
+                        "chown" | "chmod" => format!(
+                            "`{verb} --{name}` is not implemented yet; set ownership or mode in a \
+                             following `RUN chown …` / `RUN chmod …` step"
+                        ),
+                        _ => format!("`{verb}` accepts `--from=<stage>`"),
+                    };
+                    self.errors.push(
+                        Diagnostic::error(
+                            format!("unsupported {verb} option `--{name}`"),
+                            Annotation::new(tok.span, "not supported"),
+                        )
+                        .with_hint(hint),
+                    );
+                    return None;
+                }
                 let Some(v) = value else {
                     self.errors.push(
                         Diagnostic::error(
@@ -1255,6 +1301,14 @@ impl<'a> Parser<'a> {
         )?;
         let key_text = match key_tok.kind {
             TokenKind::Ident(s) => s,
+            // A directive keyword is a perfectly ordinary variable or label
+            // name — `ENV USER=app` is about as common as recipes get, and
+            // Docker accepts it. The lexer classifies `USER`, `RUN`, `ADD`,
+            // `FROM`, … as keywords wherever they appear, so without this the
+            // whole keyword set was unusable as a key across ENV / ARG / LABEL.
+            // Keywords carry no text payload, so recover it from the span,
+            // which also preserves the author's casing.
+            TokenKind::Keyword(_) => self.source[key_tok.span.start..key_tok.span.end].to_string(),
             _ => {
                 self.errors.push(Diagnostic::error(
                     format!("expected key after {directive}"),
