@@ -117,3 +117,77 @@ fn dnsmasq_args_serve_the_single_guest_with_the_veth_gateway() {
         "{args}"
     );
 }
+
+// ── Policed egress ──────────────────────────────────────────────────────────
+//
+// These run without root, which is the point: the end-to-end smoke needs root
+// plus `/dev/net/tun` and self-skips everywhere else, so it proves nothing on
+// an ordinary PR. The security property — that a bootable `RUN`'s ruleset
+// carries the default-deny set — is asserted here so it is checked on every
+// push, on both architectures.
+
+/// The ruleset a policed-egress VM net installs masquerades its own block and
+/// terminally drops every destination the policy denies.
+///
+/// If this ever passes with an empty deny set it proves nothing, so the
+/// non-emptiness is asserted first.
+#[test]
+fn the_policed_egress_ruleset_carries_the_whole_deny_set() {
+    let plan = VmIpPlan::for_id(7);
+    let policy = crate::ssrf::EgressPolicy::default();
+    let denied = policy.denied_v4_cidrs();
+    assert!(
+        !denied.is_empty(),
+        "default policy denies nothing — the assertions below would be vacuous"
+    );
+
+    let ruleset = crate::masquerade_ruleset_for_test("umf-vmfwd-7", &plan.cidr(), &denied);
+
+    assert!(
+        ruleset.contains("masquerade"),
+        "the VM's block must be masqueraded outbound:\n{ruleset}"
+    );
+    for cidr in &denied {
+        assert!(
+            ruleset.contains(cidr),
+            "denied CIDR {cidr} missing — that category would be reachable \
+             from a bootable RUN step:\n{ruleset}"
+        );
+    }
+    // The drop must be terminal, not a mere log/continue.
+    assert!(
+        ruleset.contains("drop"),
+        "denied destinations must be dropped:\n{ruleset}"
+    );
+}
+
+/// The cloud-metadata endpoint is the single destination most worth naming
+/// explicitly: it is the classic SSRF target and the one an operator will look
+/// for when auditing whether a build could have reached it.
+#[test]
+fn the_policed_egress_ruleset_covers_the_cloud_metadata_range() {
+    let plan = VmIpPlan::for_id(1);
+    let policy = crate::ssrf::EgressPolicy::default();
+    let ruleset =
+        crate::masquerade_ruleset_for_test("umf-vmfwd-1", &plan.cidr(), &policy.denied_v4_cidrs());
+    assert!(
+        ruleset.contains("169.254."),
+        "link-local (169.254.169.254 cloud metadata) must be denied:\n{ruleset}"
+    );
+}
+
+/// The per-VM block is a real `/29` carved out of `10.70.0.0/16`, disjoint
+/// from the container egress range, and the guest/gateway sit inside it.
+#[test]
+fn each_vm_block_is_a_distinct_slash_29() {
+    let a = VmIpPlan::for_id(1);
+    let b = VmIpPlan::for_id(2);
+    assert_ne!(a.cidr(), b.cidr(), "concurrent builds need disjoint blocks");
+    assert!(a.cidr().ends_with("/29"), "block is a /29: {}", a.cidr());
+    assert!(
+        a.cidr().starts_with("10.70."),
+        "VM range stays disjoint from the container 10.69/16: {}",
+        a.cidr()
+    );
+    assert_ne!(a.guest(), a.host_veth(), "guest and gateway differ");
+}

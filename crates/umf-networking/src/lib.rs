@@ -588,6 +588,19 @@ fn add_masquerade(
     nft_apply(&masquerade_ruleset(table_name, subnet_cidr, deny_cidrs))
 }
 
+/// Test-only view of the generated ruleset, so the security property can be
+/// asserted without root. The end-to-end smoke needs root plus `/dev/net/tun`
+/// and self-skips elsewhere, which means an ordinary PR would otherwise check
+/// nothing about the deny set.
+#[cfg(test)]
+pub(crate) fn masquerade_ruleset_for_test(
+    table_name: &str,
+    subnet_cidr: &str,
+    deny_cidrs: &[&str],
+) -> String {
+    masquerade_ruleset(table_name, subnet_cidr, deny_cidrs)
+}
+
 /// In-crate alias so the VM egress path installs the *same* ruleset a rootful
 /// container `RUN` gets. Deliberately one function rather than two similar
 /// ones: if the container policy changes shape, the VM path cannot silently
