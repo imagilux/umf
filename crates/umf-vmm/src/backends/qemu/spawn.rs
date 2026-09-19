@@ -84,22 +84,24 @@ pub async fn spawn_qemu(binary: &str, spec: &VmSpec) -> Result<VmHandle, VmError
         }
     })?;
 
-    // Leak the tempdirs: the QMP socket + the writable VARS copy need to
-    // outlive this function. The handle owns the cleanup story (today we
-    // just let the OS reclaim on process exit; a future Drop impl could
-    // remove them).
+    // The QMP socket dir and the writable VARS copy must outlive this
+    // function — qemu holds both open for the life of the VM — so hand them
+    // to the handle. Its `Drop` removes them when the caller is done.
+    //
+    // These used to be detached with `TempDir::keep()` and never removed, on
+    // the stated reasoning that the OS reclaims them at process exit; the
+    // system temp directory is not reclaimed that way, so every spawn left a
+    // directory behind, and a bootable build spawns one micro-VM per `RUN`.
+    let mut handle = VmHandle::new(id);
+    handle.child = Some(child);
+    handle.control_socket = qmp_socket;
     if let Some(dir) = sock_dir {
-        let _ = dir.keep();
+        handle.own_scratch(dir);
     }
     if let Some(dir) = fw_dir {
-        let _ = dir.keep();
+        handle.own_scratch(dir);
     }
-
-    Ok(VmHandle {
-        child: Some(child),
-        control_socket: qmp_socket,
-        id,
-    })
+    Ok(handle)
 }
 
 /// For a split-OVMF boot, copy the host VARS template into a fresh

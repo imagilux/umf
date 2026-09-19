@@ -1,0 +1,18 @@
+---
+fixes:
+  - |
+    Every VM spawn no longer leaves a temporary directory behind. Both VMM
+    backends detached their scratch directories with ``TempDir::keep()`` and
+    nothing ever removed them: the control socket's parent directory in each
+    (QMP for QEMU, the REST API socket for Cloud Hypervisor), plus the writable
+    per-run copy of a split-firmware UEFI variable store under QEMU.
+    The in-code justification was that the operating system reclaims these at
+    process exit. That is not true of the system temporary directory, which is
+    cleared on reboot or by a ``tmpfiles`` sweep, so the directories
+    accumulated indefinitely. It mattered most where it was least visible: a
+    bootable build launches one micro-VM per ``RUN`` step, so the leak scaled
+    with recipe length, and a VARS copy is several hundred kilobytes.
+    ``VmHandle`` now owns the ``TempDir`` values, so their own ``Drop`` removes
+    the directories when the handle goes out of scope — cleanup is structural
+    rather than a second copy of the path logic that could drift. The field is
+    private, so the ownership cannot be detached from outside the crate.

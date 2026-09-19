@@ -92,14 +92,13 @@ pub async fn spawn_cloud_hypervisor(binary: &str, spec: &VmSpec) -> Result<VmHan
         }
     })?;
 
-    // Leak the tempdir: the API socket needs to outlive this function.
-    // Cleanup is delegated to OS reclaim on process exit (the same shape
-    // the qemu backend uses for its QMP socket).
-    let _ = dir.keep();
-
-    Ok(VmHandle {
-        child: Some(child),
-        control_socket: Some(socket_path),
-        id,
-    })
+    // The API socket's directory must outlive this function, so hand it to
+    // the handle rather than detaching it with `TempDir::keep()`; its `Drop`
+    // removes the directory when the caller is done. Same fix as the qemu
+    // backend, which leaked the same way.
+    let mut handle = VmHandle::new(id);
+    handle.child = Some(child);
+    handle.control_socket = Some(socket_path);
+    handle.own_scratch(dir);
+    Ok(handle)
 }

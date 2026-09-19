@@ -104,17 +104,6 @@ Making it work means more than accepting the base: L2 would otherwise reinstall 
 
 Previously this failed *silently* — a bootable base produced a container image with a kernel in its layers, which `umf compile` then refused for reasons that pointed nowhere near the cause.
 
-### `umf run --vmm` leaves a temporary directory behind
-
-Each VM spawn creates a temporary directory for the VMM control socket, plus a
-second one holding a writable copy of the UEFI variable store when firmware is
-used, and neither is removed when the VM exits. They accumulate under the
-system temp directory until the OS reclaims it.
-
-A bootable build spawns one micro-VM per `RUN` step, so a multi-step recipe
-leaves one directory per step. Nothing breaks, but a long-lived build host will
-want a periodic sweep until this is fixed.
-
 ## Cross-architecture
 
 `--platform=<os>/<arch>` selects the architecture for **component resolution** (base images, kernels) and for the bootable preflight (`qemu-system-<arch>` detection). Cross-arch **container `RUN` execution** (via `binfmt_misc` + qemu-user-static, as the spec's [Cross-Architecture Builds](specification.md#cross-architecture-builds) describes) is a follow-up: a `--platform` that differs from the host arch resolves the right images but does not yet emulate foreign-arch `RUN` steps. Same-arch builds are unaffected.
