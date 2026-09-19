@@ -491,3 +491,52 @@ fn a_dependency_absent_from_the_tree_is_not_an_error() {
     let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
     assert_eq!(picked.len(), 1, "only the module that exists: {picked:?}");
 }
+
+/// Regression, from the second boot failure of the same feature: the
+/// dependency lookup must survive `modules.dep` naming files that no longer
+/// exist under those names.
+///
+/// `scripts/make-boot-fixture.sh` gunzips every `.ko.gz` in the tree,
+/// because busybox `insmod` cannot read a compressed module — but
+/// `modules.dep` is copied verbatim and still says `…/jbd2.ko.gz`. A
+/// path-keyed lookup matches nothing, resolves no dependencies, and
+/// degrades silently to the flat allowlist: the same `Unknown symbol
+/// jbd2_*` panic as before the fix, with nothing to show the resolution
+/// step ran at all.
+#[test]
+fn dependencies_resolve_when_modules_dep_names_a_stale_compression_suffix() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+
+    // On disk: decompressed, exactly as the fixture leaves them.
+    for rel in [
+        "kernel/fs/ext4/ext4.ko",
+        "kernel/fs/jbd2/jbd2.ko",
+        "kernel/fs/mbcache.ko",
+        "kernel/lib/crc16.ko",
+    ] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stub").unwrap();
+    }
+    // In modules.dep: the `.ko.gz` names depmod originally saw.
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/ext4/ext4.ko.gz: kernel/fs/jbd2/jbd2.ko.gz kernel/fs/mbcache.ko.gz \
+         kernel/lib/crc16.ko.gz\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+
+    for needed in ["ext4", "jbd2", "mbcache", "crc16"] {
+        assert!(
+            names.iter().any(|n| n == needed),
+            "`{needed}` must resolve despite the stale `.ko.gz` in modules.dep: {names:?}",
+        );
+    }
+}
