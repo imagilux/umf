@@ -372,6 +372,10 @@ fn profile_from_child(
         source,
         manifest_digest: manifest_digest.to_string(),
         labels,
+        // `inspect` renders the entrypoint from its own richer config read
+        // (see the `entrypoint` field above); the profile's copy exists for
+        // the builder's inheritance path and is not needed here.
+        entrypoint: None,
     })
 }
 

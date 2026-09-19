@@ -26,7 +26,7 @@ use oci_client::manifest::ImageIndexEntry;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 use umf_core::architecture::Architecture;
-use umf_core::ast::{AddSource, Ast, Directive, EntrypointInit, FromSource};
+use umf_core::ast::{AddSource, Ast, Directive, EntrypointInit, FromSource, Span, Spanned};
 use umf_core::l0::L0Kind;
 use umf_core::label;
 
@@ -65,6 +65,23 @@ pub enum BootableBuildError {
     /// this, but a directly-constructed AST might.
     #[error("empty AST: no stages to build")]
     EmptyAst,
+
+    /// Extending a `type=bootable` base whose PID 1 cannot be recovered.
+    ///
+    /// The base declares `entrypoint=appliance` — a binary PID 1 — but carries
+    /// no OCI `Entrypoint` field to say *which* binary, so it was built before
+    /// that was recorded. Guessing would produce a disk that boots to a panic
+    /// with nothing pointing at the cause, so the recipe has to say.
+    #[error(
+        "cannot inherit the ENTRYPOINT of bootable base {base:?}: it declares a \
+         binary PID 1 but records no OCI Entrypoint (an image built before that \
+         field was emitted)\n\
+         restate `ENTRYPOINT` in this recipe, or rebuild the base"
+    )]
+    UninheritableEntrypoint {
+        /// The base reference being extended.
+        base: String,
+    },
 
     /// Bootable builds require `FROM` to resolve to a kernel artifact —
     /// `FROM scratch` has no kernel source and is rejected.
@@ -425,18 +442,13 @@ pub async fn build_vm(
     // substituted against this — like the container path's FROM — while ADD and
     // RUN extend it positionally with any in-stage `ARG`.
     let globals = crate::arg_subst::resolve_global_args(ast, &options.build_args);
-    let (flavor, flavor_defaulted) = pick_flavor(stage);
-    let flavor = flavor.to_string();
-    let entrypoint_init = pick_entrypoint(stage)
-        .cloned()
-        .unwrap_or(EntrypointInit::Systemd);
-    if flavor_defaulted {
-        warn!(
-            reference = %tag,
-            "no `LABEL org.imagilux.umf.flavor` set; defaulting to `systemd-boot` (classic). \
-             Set it to `systemd-boot` or `uki` to be explicit."
-        );
-    }
+    // What the recipe itself said about shape. Whether these are final depends
+    // on what `FROM` turns out to be: extending a `type=bootable` base
+    // inherits its boot manifest for anything the recipe leaves unsaid, so the
+    // decision is deferred until after resolution below.
+    let (recipe_flavor, flavor_defaulted) = pick_flavor(stage);
+    let recipe_flavor = recipe_flavor.to_string();
+    let recipe_entrypoint = pick_entrypoint(stage).cloned();
 
     // FROM is the kernel artifact for bootable builds; `validate_ast_for_vm`
     // has already rejected the `FROM scratch` case. A `${VAR}` in the ref is
@@ -450,8 +462,7 @@ pub async fn build_vm(
 
     info!(
         reference = %tag,
-        from_kernel = %from_kernel_ref,
-        flavor = %flavor,
+        from = %from_kernel_ref,
         "building bootable-OS image",
     );
 
@@ -471,6 +482,57 @@ pub async fn build_vm(
     )
     .await?;
     let kernel_source = from_kernel.provenance.clone();
+
+    // Extending a `type=bootable` base. Its layers already carry the merged
+    // userland + kernel tree, so nothing about the staging build changes — the
+    // same unpack loop below lays it down. What does change is the boot
+    // manifest: the recipe's silence must mean "keep what the base declared",
+    // not "fall back to the global default", or extending an OpenRC/UKI image
+    // without restating either would quietly turn it into a systemd/
+    // systemd-boot one.
+    let base =
+        crate::introspect::introspect_for_platform(layout, &from_kernel_ref, options.architecture)
+            .ok()
+            .filter(|p| p.kind == L0Kind::Bootable);
+
+    let flavor = match (&base, flavor_defaulted) {
+        // Recipe was silent and the base declared one — inherit it.
+        (Some(profile), true) => profile
+            .labels
+            .get(label::FLAVOR)
+            .cloned()
+            .unwrap_or_else(|| recipe_flavor.clone()),
+        _ => recipe_flavor.clone(),
+    };
+    let flavor_inherited = base.is_some() && flavor_defaulted && flavor != recipe_flavor;
+
+    let entrypoint_init = match (recipe_entrypoint, &base) {
+        (Some(explicit), _) => explicit,
+        (None, Some(profile)) => inherited_entrypoint(profile).ok_or_else(|| {
+            BootableBuildError::UninheritableEntrypoint {
+                base: from_kernel_ref.clone(),
+            }
+        })?,
+        (None, None) => EntrypointInit::Systemd,
+    };
+
+    if let Some(profile) = &base {
+        info!(
+            reference = %tag,
+            base = %from_kernel_ref,
+            base_digest = %profile.manifest_digest,
+            flavor = %flavor,
+            flavor_inherited,
+            ?entrypoint_init,
+            "extending a type=bootable base",
+        );
+    } else if flavor_defaulted {
+        warn!(
+            reference = %tag,
+            "no `LABEL org.imagilux.umf.flavor` set; defaulting to `systemd-boot` (classic). \
+             Set it to `systemd-boot` or `uki` to be explicit."
+        );
+    }
 
     // Build the union L1 + L2 staging:
     //   1. `ADD <oci-ref> /` userland layers (L1, optional), in directive
@@ -667,6 +729,14 @@ pub async fn build_vm(
         umf_type: L0Kind::Bootable,
         container: ContainerConfig {
             labels,
+            // Appliance shapes record their PID 1 in the standard OCI
+            // `Entrypoint` field. The boot-manifest label only says
+            // `appliance`, which is enough for the projector (it reads the
+            // `init=` off the cmdline) but loses the argv — so extending such
+            // an image could not recover its entrypoint. Init-system shapes
+            // leave it unset: `systemd` is not a meaningful OCI entrypoint for
+            // a container runtime, and the label round-trips them already.
+            entrypoint: appliance_argv(&entrypoint_init),
             // `ENV` already reaches the micro-VM RUN steps (see
             // `bootable::run`); this carries it into the emitted config too,
             // so the image records what the recipe declared rather than
@@ -707,6 +777,56 @@ pub async fn build_vm(
 fn rootfs_path(abs: &Path, root: &Path) -> String {
     let rel = abs.strip_prefix(root).unwrap_or(abs);
     format!("/{}", rel.display())
+}
+
+/// Recover an [`EntrypointInit`] from a `type=bootable` base so an extending
+/// recipe that says nothing keeps the base's PID 1.
+///
+/// The boot-manifest `entrypoint` label is deliberately coarse — it records
+/// the *shape* (`systemd` / `openrc` / `appliance` / `none`), not the argv —
+/// so the three init-system shapes round-trip from the label alone. An
+/// appliance's binary and its arguments do not: they are recovered from the
+/// standard OCI `Entrypoint` field, which bootable builds now record for
+/// exactly this reason.
+///
+/// Returns `None` when the base claims `appliance` but carries no OCI
+/// `Entrypoint` — an image built before that field was recorded. Guessing a
+/// PID 1 there would be worse than refusing: the wrong `init=` produces a
+/// disk that boots to a kernel panic with nothing pointing at the cause.
+fn inherited_entrypoint(base: &crate::introspect::L0Profile) -> Option<EntrypointInit> {
+    match base.labels.get(label::ENTRYPOINT).map(String::as_str) {
+        Some("systemd") => Some(EntrypointInit::Systemd),
+        Some("openrc") => Some(EntrypointInit::OpenRc),
+        Some("none") => Some(EntrypointInit::None),
+        Some("appliance") => {
+            let argv = base.entrypoint.as_ref()?;
+            if argv.is_empty() {
+                return None;
+            }
+            Some(EntrypointInit::Exec(
+                argv.iter()
+                    .map(|a| Spanned::new(a.clone(), Span::new(0, 0)))
+                    .collect(),
+            ))
+        }
+        // No label at all: the base predates the boot manifest, or is not
+        // really bootable. Treat it as uninheritable rather than assuming.
+        _ => None,
+    }
+}
+
+/// The argv a binary PID 1 runs, for the OCI `Entrypoint` field. `None` for
+/// init-system and `none` shapes, which that field would misdescribe.
+///
+/// Shell form is *not* split here: the builder applies shell-style word
+/// splitting at execution time, so the single command string is recorded as
+/// one element and re-read the same way.
+fn appliance_argv(init: &EntrypointInit) -> Option<Vec<String>> {
+    match init {
+        EntrypointInit::Path(p) => Some(vec![p.value.clone()]),
+        EntrypointInit::Exec(argv) => Some(argv.iter().map(|a| a.value.clone()).collect()),
+        EntrypointInit::Systemd | EntrypointInit::OpenRc | EntrypointInit::None => None,
+    }
 }
 
 /// Boot-manifest `entrypoint` value: the init-system name, `appliance` for a

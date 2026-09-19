@@ -272,12 +272,13 @@ fn probe_bootable(
         // fail introspection, and the failure was swallowed into "not a
         // kernel" — silently building a container from a kernel base.
         match introspect_for_platform(layout, &canonical, arch) {
-            // A kernel base makes the build bootable. So does a `type=bootable`
-            // base per the spec — and routing it here matters even though the
-            // builder cannot extend one yet: the bootable path rejects it with
-            // a message naming the reason, whereas falling through to the
-            // container path silently produced a container with a kernel in it
-            // that `umf compile` later refused for unrelated-looking reasons.
+            // A kernel base makes the build bootable, and so does a
+            // `type=bootable` base: the spec says extending one keeps it
+            // bootable, and the builder now does that — unpacking the base's
+            // merged tree and inheriting its boot manifest for anything the
+            // recipe leaves unsaid. Falling through to the container path
+            // instead produced a container with a kernel in its layers that
+            // `umf compile` later refused for unrelated-looking reasons.
             Ok(profile) => profile.kind.is_kernel() || profile.kind == L0Kind::Bootable,
             // A base we cannot introspect is not evidence of a container.
             // It is usually unreachable (offline, private registry) and the

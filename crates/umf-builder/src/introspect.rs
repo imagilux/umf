@@ -39,6 +39,13 @@ pub struct L0Profile {
     pub manifest_digest: String,
     /// Verbatim copy of the OCI config `Labels` map.
     pub labels: BTreeMap<String, String>,
+    /// The OCI config's `Entrypoint`, when the image declares one.
+    ///
+    /// Needed because the boot-manifest `entrypoint` label is lossy: a
+    /// binary PID 1 records only `appliance`, dropping the argv. Extending
+    /// such an image has to recover the real entrypoint from somewhere, and
+    /// the standard OCI field is the right place for it to live.
+    pub entrypoint: Option<Vec<String>>,
 }
 
 impl L0Profile {
@@ -53,6 +60,7 @@ impl L0Profile {
             source: L0Source::Label,
             manifest_digest: String::new(),
             labels: BTreeMap::new(),
+            entrypoint: None,
         }
     }
 }
@@ -136,6 +144,7 @@ fn introspect_image(
     let config_bytes = layout.read_blob(&manifest.config.digest)?;
     let doc: ImageConfigDoc = serde_json::from_slice(&config_bytes)?;
     let labels = doc.config.labels;
+    let entrypoint = doc.config.entrypoint;
 
     let (kind, source) = match labels.get(label::TYPE) {
         Some(value) => (L0Kind::from_label(value), L0Source::Label),
@@ -147,6 +156,7 @@ fn introspect_image(
         source,
         manifest_digest: manifest_digest.to_string(),
         labels,
+        entrypoint,
     })
 }
 
@@ -176,8 +186,10 @@ fn infer_kind(manifest: &OciImageManifest) -> L0Kind {
 // ── Minimal OCI image config shape used for label extraction ─────────────────
 //
 // The full OCI image config (`application/vnd.oci.image.config.v1+json`) has
-// many fields (env, cmd, entrypoint, rootfs, history, …). For introspection
-// we only need `config.Labels`; everything else is allowed-but-ignored.
+// many fields (env, cmd, rootfs, history, …). For introspection we need
+// `config.Labels` plus `config.Entrypoint` — the latter so extending a
+// bootable appliance image can recover its PID 1, which the boot-manifest
+// label flattens to `appliance`. Everything else is allowed-but-ignored.
 
 #[derive(Debug, Default, Deserialize)]
 struct ImageConfigDoc {
@@ -189,6 +201,8 @@ struct ImageConfigDoc {
 struct ConfigSection {
     #[serde(default, rename = "Labels")]
     labels: BTreeMap<String, String>,
+    #[serde(default, rename = "Entrypoint")]
+    entrypoint: Option<Vec<String>>,
 }
 
 #[cfg(test)]
