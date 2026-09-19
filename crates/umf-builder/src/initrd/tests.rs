@@ -388,3 +388,106 @@ fn the_run_init_configures_a_staged_static_network() {
     // DHCP stays as the fallback for the user-mode-stack path.
     assert!(script.contains("udhcpc"), "DHCP fallback must remain");
 }
+
+/// Regression, from a real boot failure: selecting `ext4` must also embed
+/// `jbd2`, `mbcache` and `crc16`.
+///
+/// The allowlist names drivers, not what drivers need. `squashfs` needs
+/// nothing, so a flat list looked correct until a second filesystem was
+/// added — and the failure gives no hint at this code. `ext4.ko` loads,
+/// every `jbd2_*` symbol resolves to nothing, `mount` returns `EINVAL`,
+/// PID 1 exits and the kernel panics at `switch_root`:
+///
+/// ```text
+/// ext4: Unknown symbol jbd2_journal_init_inode (err -2)
+/// mount: mounting /dev/vda2 on /sysroot failed: Invalid argument
+/// Kernel panic - not syncing: Attempted to kill init!
+/// ```
+#[test]
+fn a_filesystem_driver_brings_its_dependencies_with_it() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+
+    // A module tree shaped like Alpine's: the driver in one place, the
+    // libraries it needs scattered elsewhere.
+    for rel in [
+        "kernel/fs/ext4/ext4.ko.gz",
+        "kernel/fs/jbd2/jbd2.ko.gz",
+        "kernel/fs/mbcache.ko.gz",
+        "kernel/lib/crc16.ko.gz",
+        "kernel/fs/squashfs/squashfs.ko.gz",
+        // Present in the tree but reachable from nothing in the allowlist.
+        "kernel/fs/xfs/xfs.ko.gz",
+    ] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"\x1f\x8b").unwrap();
+    }
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/ext4/ext4.ko.gz: kernel/fs/jbd2/jbd2.ko.gz kernel/fs/mbcache.ko.gz \
+         kernel/lib/crc16.ko.gz\n\
+         kernel/fs/jbd2/jbd2.ko.gz:\n\
+         kernel/fs/squashfs/squashfs.ko.gz:\n\
+         kernel/fs/xfs/xfs.ko.gz:\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+
+    for needed in ["ext4", "jbd2", "mbcache", "crc16"] {
+        assert!(
+            names.iter().any(|n| n == needed),
+            "`{needed}` must be embedded — ext4 cannot mount without it: {names:?}",
+        );
+    }
+    assert!(
+        !names.iter().any(|n| n == "xfs"),
+        "dependency resolution must not drag in unrelated modules: {names:?}",
+    );
+}
+
+/// A tree with no `modules.dep` still yields the allowlisted modules. Some
+/// kernel packages ship without one, and fewer modules is the behaviour
+/// that predates dependency resolution — never an error.
+#[test]
+fn a_tree_without_modules_dep_still_collects_the_allowlist() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    for rel in ["kernel/fs/squashfs/squashfs.ko", "kernel/fs/ext4/ext4.ko"] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stub").unwrap();
+    }
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+    assert!(names.iter().any(|n| n == "squashfs"), "{names:?}");
+    assert!(names.iter().any(|n| n == "ext4"), "{names:?}");
+}
+
+/// A dependency naming a module the tree does not carry is skipped, not
+/// fatal: the kernel compiled it in, so there is nothing to embed.
+#[test]
+fn a_dependency_absent_from_the_tree_is_not_an_error() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    let path = root.join("kernel/fs/erofs/erofs.ko");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"stub").unwrap();
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/erofs/erofs.ko: kernel/lib/lz4/lz4_decompress.ko\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    assert_eq!(picked.len(), 1, "only the module that exists: {picked:?}");
+}
