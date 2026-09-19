@@ -37,6 +37,16 @@ fixes:
     have been served the previously cached **squashfs** disk — a silently wrong
     artifact rather than a cache miss.
   - |
+    The generated initramfs embeds each module's dependencies, resolved
+    transitively from ``modules.dep``, plus a ``crc32c`` crypto provider.
+    Previously it carried only the allowlisted drivers, which was sufficient
+    while ``squashfs`` (which needs no other module) was the only root
+    filesystem: an ext4 root loaded ``ext4.ko`` without ``jbd2``, resolved no
+    symbols, and panicked at ``switch_root``. ``crc32c`` is requested through
+    the crypto API by algorithm name rather than by symbol, so it is carried
+    explicitly — ``mkfs.ext4`` enables ``metadata_csum`` by default and the
+    mount fails without it.
+  - |
     The reported size of a squashfs root partition was read from the output
     stream's position after the write, which ``backhand`` leaves ~96 bytes in
     regardless of the real image size because it seeks back to offset 0 to lay

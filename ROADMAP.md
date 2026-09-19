@@ -271,14 +271,43 @@ the cmdline is pinned to the default while the partition honours `--fs`. The
 sparse copy, which is new logic and corrupts images silently if wrong, has four
 tests, all confirmed to fail under two separate compiling sabotages.
 
-**Boot proof — ext4 lands, erofs is `unproven` until CI runs.** `tests/boot_smoke.rs`
-now projects and boots the fixture once per filesystem. It could not be run
-here: the environment has no KVM, no local kernel, and the network policy
-blocks both Docker Hub's CDN and Alpine's, so the fixture cannot be built. In
-CI, `mkfs.ext4` is on the runner image and ext4 boots without further change;
-`mkfs.erofs` is not, so erofs needs the `erofs-utils` install in
-`boot-smoke.yml`. `UMF_REQUIRE_MKFS=1` turns the skip into a failure so the
-lane cannot go green having booted only squashfs.
+**Boot proof — squashfs and ext4 both reach userspace; erofs is `unproven`.**
+`tests/boot_smoke.rs` projects and boots the fixture once per filesystem. It
+could not be run locally (no KVM, no local kernel, and the network policy
+blocks both Docker Hub's CDN and Alpine's), so it was proved in CI:
+
+```
+boot-smoke OK (squashfs): observed userspace marker "UMF-BOOT-OK-7f3a2c9d"
+boot-smoke OK (ext4):     observed userspace marker "UMF-BOOT-OK-7f3a2c9d"
+SKIP erofs boot: `mkfs.erofs` absent
+```
+
+erofs stays unproven until `erofs-utils` is installed in `boot-smoke.yml`;
+`UMF_REQUIRE_MKFS=1` then turns that skip into a failure.
+
+**The boot lane earned its cost three times over.** Every in-process test
+passed while the disk did not boot, and each failure was a distinct thing no
+build-time check could have seen:
+
+1. **Link-time deps.** `ext4.ko` was embedded without `jbd2` / `mbcache` /
+   `crc16`. It loads, every `jbd2_*` symbol resolves to nothing, the mount
+   returns `EINVAL` and PID 1 dies at switch_root. The flat allowlist was not
+   wrong before — `squashfs` needs no other module, so it looked correct right
+   up until a second filesystem existed. Fixed by resolving `modules.dep`.
+2. **A fix that silently did nothing.** That resolution keyed on paths, but
+   `make-boot-fixture.sh` gunzips every `.ko.gz` without re-running `depmod`,
+   so `modules.dep` still named `jbd2.ko.gz` while the file was `jbd2.ko`.
+   Zero matches, zero dependencies, silent fallback to the flat list — the
+   identical panic, with nothing to show the new code had run. Fixed by
+   keying on the module stem, which also survives any repacking of a kernel
+   artifact rather than just our own fixture.
+3. **A dependency no graph can express.** `mkfs.ext4` enables `metadata_csum`
+   by default, so mounting asks the *crypto API* for a `crc32c` shash by
+   algorithm name. That is not a symbol reference, so it appears nowhere in
+   `modules.dep` and no amount of correct resolution finds it.
+
+The lesson worth keeping: "the driver is present" is not "the filesystem
+mounts". Only a boot distinguishes them.
 
 ### P1.4 — Cross-architecture `RUN` execution · absent · documented
 
