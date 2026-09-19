@@ -36,29 +36,29 @@ The spec describes [EXPOSE](specification.md#expose) as emitting an actual defau
 
 So treat EXPOSE's default-deny as a guarantee of init-system bootable images; for the other shapes, enforce reachability with your runtime or an explicit boot-time hook.
 
-### The SSRF policy does not cover a bootable build's `RUN`
+### Bootable builds need `CAP_NET_ADMIN` for their `RUN` steps
 
-`RUN` steps in a **bootable** build do have network access — the micro-VM gets
-a virtio NIC on the VMM's user-mode network stack, and the generated run
-initramfs brings `eth0` up and takes a DHCP lease — but that egress is **not
-policed**. The [default-deny SSRF set](specification.md#run-step-network-egress)
-that container builds enforce (loopback, link-local including the
-`169.254.169.254` cloud-metadata IP, RFC1918, IPv6 ULA, CGNAT) does not apply,
-and `--rootless-net-allow` / `UMF_ROOTLESS_NET_ALLOW` have no effect on it.
+A bootable build's `RUN` steps execute in a micro-VM whose egress is policed by
+the same default-deny SSRF set container builds obey. That is implemented with
+a tap device in a network namespace, which requires **`CAP_NET_ADMIN`** — so a
+bootable build with `RUN` steps needs it (run as root, or grant the
+capability).
 
-The reason is structural: a container `RUN` egresses through a namespace UMF
-programs — a `forward`-hook drop set on the NAT table when rootful, a
-connect-time check in the userspace stack when rootless. A bootable `RUN`
-egresses through the VMM's own user-mode stack, which UMF does not program and
-which has no notion of those categories.
+There is deliberately **no unpoliced fallback**. A build that cannot create the
+namespace fails with an actionable error rather than quietly dropping to the
+VMM's own user-mode network stack, which UMF cannot program and which enforces
+nothing. A fallback would make the guarantee depend on how the build was
+launched, which is the same as not having one.
 
-So in a bootable build a `RUN` step can reach the host's own services, the
-cloud-metadata endpoint, and the local network. `umf build` warns once per run
-when this applies.
+Bootable builds with no `RUN` steps are unaffected, as are all container
+builds.
 
-Mitigations until it is closed: build on a host with no route to whatever must
-stay unreachable, or block it at the host firewall. Container builds are
-unaffected.
+**DNS.** The guest takes the build host's nameservers from `/etc/resolv.conf`,
+minus any loopback stub (systemd-resolved's `127.0.0.53`), which is unreachable
+from the guest's namespace and denied by the policy in any case. A host whose
+*only* resolver is such a stub leaves the guest unable to resolve names — the
+same caveat the rootless `native` container backend carries. Point the host at
+a real upstream resolver, or use literal addresses in the recipe.
 
 ## Rootless builds
 

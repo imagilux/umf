@@ -139,3 +139,65 @@ fn native_vmnet_sets_up_and_tears_down_leak_free() {
         assert!(!present, "nft DNAT table gone after drop");
     }
 }
+
+/// The policed-egress VM net installs the SSRF default-deny set on its host
+/// table — the whole point of the path. A bootable build's `RUN` step attaches
+/// to this instead of the VMM's unpoliced user-mode stack.
+#[test]
+fn policed_egress_net_installs_the_ssrf_deny_set() {
+    if !Uid::current().is_root() || !Path::new("/dev/net/tun").exists() {
+        let why = "needs root + /dev/net/tun";
+        assert!(
+            !privileged_required(),
+            "UMF_REQUIRE_PRIVILEGED=1 but the policed-egress smoke cannot run: {why}"
+        );
+        eprintln!("skipping policed-egress smoke: {why}");
+        return;
+    }
+
+    let id: u32 = 60_344;
+    let table = format!("umf-vmfwd-{id}");
+    let policy = umf_networking::ssrf::EgressPolicy::default();
+    // The assertion below is only meaningful if the policy denies something.
+    let denied = policy.denied_v4_cidrs();
+    assert!(
+        !denied.is_empty(),
+        "default policy must deny something, or this test proves nothing"
+    );
+
+    let net = VmNet::setup_policed_egress(id, policy)
+        .expect("policed-egress VmNet::setup should succeed as root");
+
+    assert_eq!(net.tap_name(), format!("umftap{id}"), "tap name");
+    assert_ne!(net.guest_ip(), net.gateway(), "guest and gateway differ");
+
+    // Read the ruleset back from nft rather than trusting that apply returned
+    // Ok — a partially-installed table would leave a category reachable.
+    if let Ok(out) = Command::new("nft")
+        .args(["list", "table", "inet", &table])
+        .output()
+    {
+        assert!(out.status.success(), "nft table {table} must exist");
+        let ruleset = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            ruleset.contains("masquerade"),
+            "outbound must be masqueraded:\n{ruleset}"
+        );
+        for cidr in &denied {
+            assert!(
+                ruleset.contains(cidr),
+                "denied CIDR {cidr} missing from the ruleset:\n{ruleset}"
+            );
+        }
+    }
+
+    drop(net);
+
+    assert!(
+        !host_link_exists(&format!("vmh{id}")),
+        "host veth gone after drop",
+    );
+    if let Some(present) = nft_table_exists(&table) {
+        assert!(!present, "nft table gone after drop");
+    }
+}
