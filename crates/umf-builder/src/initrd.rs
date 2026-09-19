@@ -334,6 +334,17 @@ fn modules_allowlist(flavor: &InitramfsFlavor) -> &'static [&'static str] {
             "squashfs",
             "ext4",
             "erofs",
+            // ext4 asks the *crypto API* for "crc32c" when a filesystem has
+            // `metadata_csum` — which `mkfs.ext4` enables by default — and
+            // erofs checksums its superblock the same way. That request goes
+            // through `crypto_alloc_shash`, not through a symbol reference,
+            // so `modules.dep` does not list it and dependency resolution
+            // cannot find it. Without these the mount fails with `ENOENT`
+            // and one line of explanation: "Cannot load crc32c driver".
+            "libcrc32c",
+            "crc32c",
+            "crc32c_generic",
+            "crc32c_intel",
         ],
         InitramfsFlavor::Run => &[
             // Boot-side basics — still needed even when the rootfs is on
@@ -348,6 +359,17 @@ fn modules_allowlist(flavor: &InitramfsFlavor) -> &'static [&'static str] {
             "squashfs",
             "ext4",
             "erofs",
+            // ext4 asks the *crypto API* for "crc32c" when a filesystem has
+            // `metadata_csum` — which `mkfs.ext4` enables by default — and
+            // erofs checksums its superblock the same way. That request goes
+            // through `crypto_alloc_shash`, not through a symbol reference,
+            // so `modules.dep` does not list it and dependency resolution
+            // cannot find it. Without these the mount fails with `ENOENT`
+            // and one line of explanation: "Cannot load crc32c driver".
+            "libcrc32c",
+            "crc32c",
+            "crc32c_generic",
+            "crc32c_intel",
             // 9p filesystem (host-staging share).
             "9p",
             "9pnet",
@@ -381,8 +403,8 @@ fn collect_modules_for(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let stem = module_stem(&name);
-        if allowlist.contains(&stem.as_str()) {
+        let key = module_key(&module_stem(&name));
+        if allowlist.iter().any(|a| module_key(a) == key) {
             out.push(entry.path().to_path_buf());
         }
     }
@@ -430,6 +452,7 @@ fn with_dependencies(selected: Vec<PathBuf>, modules_root: &Path) -> Vec<PathBuf
             let name = entry.file_name().to_string_lossy().into_owned();
             let stem = module_stem(&name);
             if stem != name {
+                let stem = module_key(&stem);
                 // Only real modules: `module_stem` returns the name
                 // unchanged for anything that is not a `.ko*`.
                 on_disk.insert(stem, entry.path().to_path_buf());
@@ -443,7 +466,7 @@ fn with_dependencies(selected: Vec<PathBuf>, modules_root: &Path) -> Vec<PathBuf
     let mut queue: Vec<String> = selected
         .iter()
         .filter_map(|p| p.file_name())
-        .map(|n| module_stem(&n.to_string_lossy()))
+        .map(|n| module_key(&module_stem(&n.to_string_lossy())))
         .collect();
 
     while let Some(stem) = queue.pop() {
@@ -477,7 +500,7 @@ fn parse_modules_dep(modules_root: &Path) -> BTreeMap<String, Vec<String>> {
     let stem_of = |path: &str| -> Option<String> {
         Path::new(path)
             .file_name()
-            .map(|n| module_stem(&n.to_string_lossy()))
+            .map(|n| module_key(&module_stem(&n.to_string_lossy())))
     };
     let mut map = BTreeMap::new();
     for line in text.lines() {
@@ -493,6 +516,14 @@ fn parse_modules_dep(modules_root: &Path) -> BTreeMap<String, Vec<String>> {
         );
     }
     map
+}
+
+/// Module names treat `-` and `_` as the same character — `modprobe` does,
+/// and a tree spells the file either way (`crc32c-intel.ko` on x86 against
+/// `crc32c_intel` everywhere else). Compare through this so an allowlist
+/// entry cannot miss purely on punctuation.
+fn module_key(stem: &str) -> String {
+    stem.replace('-', "_")
 }
 
 fn module_stem(filename: &str) -> String {

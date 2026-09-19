@@ -540,3 +540,48 @@ fn dependencies_resolve_when_modules_dep_names_a_stale_compression_suffix() {
         );
     }
 }
+
+/// Regression, from the third boot failure of the same feature: ext4 needs
+/// a `crc32c` *crypto* provider, which no dependency graph will reveal.
+///
+/// `mkfs.ext4` enables `metadata_csum` by default, so mounting asks the
+/// crypto API for a "crc32c" shash via `crypto_alloc_shash`. That is a
+/// runtime request by algorithm name, not a symbol reference, so it does
+/// not appear in `modules.dep` and `with_dependencies` cannot infer it.
+/// The mount then fails with `ENOENT` and exactly one line of explanation:
+///
+/// ```text
+/// EXT4-fs (vda2): Cannot load crc32c driver.
+/// mount: mounting /dev/vda2 on /sysroot failed: No such file or directory
+/// ```
+#[test]
+fn the_boot_initramfs_carries_a_crc32c_provider() {
+    let boot = modules_allowlist_for_test(&InitramfsFlavor::Boot);
+    assert!(
+        boot.contains(&"crc32c_generic"),
+        "ext4 with metadata_csum cannot mount without a crc32c shash: {boot:?}",
+    );
+    assert!(
+        boot.contains(&"libcrc32c"),
+        "the crc32c wrapper the filesystems link against: {boot:?}",
+    );
+}
+
+/// `-` and `_` are the same character in a module name. x86 spells the
+/// accelerated driver `crc32c-intel.ko` while every reference to it uses an
+/// underscore, so matching the raw filename silently drops it.
+#[test]
+fn module_matching_ignores_dash_versus_underscore() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    let path = root.join("kernel/arch/x86/crypto/crc32c-intel.ko");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"stub").unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    assert_eq!(
+        picked.len(),
+        1,
+        "`crc32c_intel` must match the file spelled `crc32c-intel.ko`: {picked:?}",
+    );
+}
