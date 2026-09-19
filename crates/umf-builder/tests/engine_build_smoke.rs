@@ -42,10 +42,22 @@ fn smoke_enabled() -> bool {
 
 /// Pull errors that are environmental (registry rate limit, transient
 /// network failure) shouldn't fail the test — they should mark it
-/// skipped with a clear message. We detect by inspecting the error
-/// string; brittle but tests are advisory anyway.
-fn is_pull_environmental(err: &dyn std::fmt::Display) -> bool {
-    let s = err.to_string().to_lowercase();
+/// skipped with a clear message. Detection is by substring over the
+/// error's rendered cause chain: still brittle, but it can at least
+/// reach the text it looks for.
+fn is_pull_environmental(err: &dyn std::error::Error) -> bool {
+    // Read the whole cause chain, not just the top line. Every substring
+    // below is OS- or registry-level text that surfaces *underneath* a
+    // transport error: `reqwest::Error`'s own `Display` is cause-less, so
+    // a `Display` bound here could never see any of them and the helper
+    // classified nothing (see #56).
+    let mut s = err.to_string().to_lowercase();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        s.push('\n');
+        s.push_str(&cause.to_string().to_lowercase());
+        source = cause.source();
+    }
     s.contains("toomanyrequests")
         || s.contains("rate limit")
         || s.contains("name or service not known")

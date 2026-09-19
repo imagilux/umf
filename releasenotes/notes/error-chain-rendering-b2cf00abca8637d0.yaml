@@ -22,3 +22,12 @@ fixes:
     themselves and a fully-interpolated chain still renders as a single line.
     The first line is unchanged, so existing expectations and log scraping
     continue to match; causes follow on indented continuation lines.
+    The smoke lanes' ``is_pull_environmental`` helpers, which decide whether a
+    registry failure is reported or skipped, had the same defect in a sharper
+    form: two were bounded on ``Display`` while matching only on text that
+    appears in the chain, so they could never match their own substrings. They
+    now walk the chain, and the CLI-level one reads the ``error:`` line plus
+    its ``caused by:`` continuations and no further — a build logs a
+    Debug-formatted chain per registry candidate that fails before a later one
+    succeeds, so scanning the whole stream would wave a genuine failure through
+    as environmental.
