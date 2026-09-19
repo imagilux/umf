@@ -104,9 +104,11 @@ pub enum AddProvenance {
 /// 3. Cache — the OCI ref looked up directly in the layout; no network.
 /// 4. Registry pull — only when a `registry` client is also supplied.
 ///
-/// Source-build fallback (for sovereign builds without registry access) is not
-/// yet wired — the spec's `registry → cache → source build` chain is two-thirds
-/// done here.
+/// There is no source-build fallback, by design. A reference in neither the
+/// cache nor a registry is an error: where a component's sources live is the
+/// author's concern, and an unresolvable reference must fail rather than
+/// trigger an implicit build. Sovereign operation comes from the cache rung —
+/// a pre-warmed layout resolves with no network at all.
 pub async fn resolve_add(
     reference: &str,
     architecture: Architecture,

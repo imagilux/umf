@@ -1,4 +1,17 @@
-//! Component resolution: `registry → local cache → source build`.
+//! Component resolution: `override → local cache → registry`.
+//!
+//! Cache first, so a pre-warmed node resolves with no network access. A
+//! reference that is in neither is an error — UMF does not fetch or build a
+//! component's sources on the author's behalf, and an unresolvable reference
+//! must fail rather than trigger an implicit build.
+//!
+//! This header previously claimed a third `source build` rung, which never
+//! existed and was never intended to. Sovereignty means a *build* needs no
+//! registry — every component is itself an ordinary `umf build` whose output
+//! lands in this cache, so an air-gapped operator builds them in dependency
+//! order. That is a workflow the operator drives, not a fallback inside
+//! resolution: an automatic source build would turn a typo into a multi-hour
+//! compile and would require UMF to know where every component's sources are.
 //!
 //! Applies uniformly to every OCI reference (FROM, `ADD --from=<image>`).
 //! Sovereignty-first: an air-gapped node must be able to produce any artifact

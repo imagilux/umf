@@ -97,9 +97,11 @@ pub enum FromKernelProvenance {
 ///    no network.
 /// 3. Registry pull — only when a `registry` client is supplied.
 ///
-/// Upstream source build (compile from kernel.org tarball) is the spec's
-/// sovereignty endpoint but isn't wired here — the kernel-from-FROM path
-/// expects an OCI artifact produced by a separate kernel-build pipeline.
+/// A kernel is expected as an OCI artifact, produced by its own `umf build`
+/// from a kernel recipe — the system self-hosts, so a kernel artifact is just
+/// another UMF build. UMF does not compile one from an upstream tarball on the
+/// caller's behalf, and is not meant to: an air-gapped operator builds the
+/// kernel artifact first, and this resolver then finds it in the cache.
 pub async fn resolve_from_kernel(
     reference: &str,
     architecture: Architecture,
