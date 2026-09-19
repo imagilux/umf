@@ -267,3 +267,30 @@ fn the_generated_boot_init_is_valid_shell() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// The run-flavour init brings the NIC up and takes a DHCP lease, which is
+/// what gives a bootable build's `RUN` steps network access at all.
+///
+/// Pinned because this was misread once: the micro-VM's `VmSpec` sets
+/// `net: None`, which means "no pre-built `TapNet`" (the Cloud Hypervisor
+/// port-forward path), NOT "no NIC" — the QEMU backend attaches `-netdev user`
+/// unconditionally. Reading that field as "no network" produced a roadmap item
+/// claiming bootable `RUN` steps could not reach the network, which was wrong.
+/// If this assertion ever has to be deleted, the docs and the roadmap need
+/// revisiting with it: `docs/known-limitations.md` states that the egress
+/// exists but is unpoliced, which is only half true if the NIC stops coming up.
+#[test]
+fn the_run_init_brings_up_the_nic_and_takes_a_dhcp_lease() {
+    let release = "7.0.0-umf";
+    let script = build_run_init_script(release, &[], Path::new("/lib/modules"));
+    assert!(
+        script.contains("eth0"),
+        "the run init must configure a NIC:\n{script}"
+    );
+    assert!(
+        script.contains("udhcpc"),
+        "the run init must take a DHCP lease so the NIC is usable:\n{script}"
+    );
+    // The loopback is brought up too — some tooling binds to it.
+    assert!(script.contains("lo"), "loopback must come up:\n{script}");
+}

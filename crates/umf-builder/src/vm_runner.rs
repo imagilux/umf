@@ -283,6 +283,7 @@ pub async fn run_step_vm(
         kvm = config.kvm_available,
         "vm_runner: starting RUN step",
     );
+    warn_unpoliced_egress();
 
     // 1. Stage the helper files so the guest's init can read them.
     let cmd_path = staging.path().join(".umf-cmd");
@@ -412,6 +413,34 @@ fn arch_from_qemu_path(qemu_path: &std::path::Path) -> VmArch {
     } else {
         VmArch::host()
     }
+}
+
+/// Warn once per process that a bootable build's `RUN` steps egress without the
+/// SSRF policy applied.
+///
+/// A container `RUN` step is policed either way: the rootful path turns the
+/// policy into a `forward`-hook drop set on its NAT table, and the rootless
+/// path checks each connect in the userspace stack. A bootable `RUN` step runs
+/// in a micro-VM whose NIC is the VMM's own user-mode network stack
+/// (`-netdev user`), which UMF does not program — so the default-deny set does
+/// not apply, and `--rootless-net-allow` has no effect on it.
+///
+/// This is a real difference in security posture between the two build shapes,
+/// so it is said out loud rather than left to the documentation. Emitted once
+/// per process, not per step: a recipe with fifteen `RUN` directives should not
+/// produce fifteen copies of the same warning.
+fn warn_unpoliced_egress() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        warn!(
+            "bootable RUN steps reach the network through the VMM's user-mode \
+             stack, so the default-deny SSRF policy is NOT enforced for them \
+             (host services, cloud metadata and the local network are \
+             reachable, and --rootless-net-allow does not apply). Container \
+             builds are unaffected. Block what must stay unreachable at the \
+             host firewall, or build on a host with no route to it."
+        );
+    });
 }
 
 fn short_command(cmd: &str) -> String {
