@@ -22,7 +22,12 @@ fn disk_boot_passes_drive_with_virtio() {
 
 #[test]
 fn kvm_flag_emits_enable_kvm_and_cpu_host() {
-    let args = build_qemu_args(&base_spec(), None, "test");
+    // `-enable-kvm` is x86-only (see the aarch64 sibling below), and
+    // `base_spec()` takes its arch from `VmArch::host()` — so pin it, or this
+    // test asserts the opposite of the truth when run on an ARM host.
+    let mut spec = base_spec();
+    spec.arch = VmArch::X86_64;
+    let args = build_qemu_args(&spec, None, "test");
     assert!(args.iter().any(|a| a == "-enable-kvm"));
     let cpu_idx = args.iter().position(|a| a == "-cpu").expect("`-cpu`");
     assert_eq!(args[cpu_idx + 1], "host");

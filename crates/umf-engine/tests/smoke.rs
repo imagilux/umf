@@ -28,6 +28,19 @@ use umf_oci::registry::{ImageLayout, Reference, RegistryAuth, RegistryClient};
 
 const SMOKE_ENV: &str = "UMF_ENGINE_SMOKE";
 
+/// Whether the caller demands the privileged smokes actually run. The
+/// privileged CI lane sets `UMF_REQUIRE_PRIVILEGED=1` so a lane that has lost
+/// its gate fails loudly instead of reporting green on a skip.
+///
+/// This covers the *capability* gate only. An environmental registry failure
+/// further down still skips: the lane deliberately tolerates a rate-limited or
+/// unreachable registry, and turning that into a failure would trade one kind
+/// of bad signal for another.
+fn privileged_required() -> bool {
+    std::env::var("UMF_REQUIRE_PRIVILEGED")
+        .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
 fn smoke_enabled() -> bool {
     std::env::var(SMOKE_ENV).is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
 }
@@ -37,6 +50,10 @@ async fn alpine_echo_lands_in_upper_dir() {
     if !smoke_enabled() {
         eprintln!(
             "skipping {SMOKE_ENV}-gated smoke test (set {SMOKE_ENV}=1 to run; needs network + CAP_SYS_ADMIN)"
+        );
+        assert!(
+            !privileged_required(),
+            "UMF_REQUIRE_PRIVILEGED=1 but {SMOKE_ENV} is not set: this smoke would have been skipped"
         );
         return;
     }

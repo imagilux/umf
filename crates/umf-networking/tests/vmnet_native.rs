@@ -1,7 +1,9 @@
 //! Root-gated native integration smoke for [`VmNet`] (real netns / veth / tap /
-//! nft). Skipped unless run as root with `/dev/net/tun` present — i.e. only in
-//! the privileged CI lane. Proves the pure-Rust plumbing (unshare + rtnetlink +
-//! tap ioctl + setns) sets up and tears down without leaking host state, the
+//! nft). Needs root plus `/dev/net/tun`, so it runs in the privileged CI lane
+//! and skips elsewhere; set `UMF_REQUIRE_PRIVILEGED=1` (as that lane does) to
+//! turn the skip into a failure, so the lane can never silently degrade to
+//! running nothing. Proves the pure-Rust plumbing (unshare + rtnetlink + tap
+//! ioctl + setns) sets up and tears down without leaking host state, the
 //! `iproute2`-free replacement for the old `ip netns` shell-outs.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -21,16 +23,33 @@ fn host_link_exists(name: &str) -> bool {
     Path::new(&format!("/sys/class/net/{name}")).exists()
 }
 
-/// Check for `name` inside the namespace referenced by `netns_fd`, on a
-/// throwaway thread so the `setns` doesn't disturb the test's own namespace.
-fn link_exists_in_netns(netns_fd: RawFd, name: &str) -> bool {
-    let name = name.to_string();
+/// The interface names visible in the namespace referenced by `netns_fd`,
+/// read on a throwaway thread so the `setns` doesn't disturb the test's own
+/// namespace.
+///
+/// The listing comes from `/proc/thread-self/net/dev`, **not** `/sys/class/net`.
+/// sysfs's per-netns filtering is keyed on the namespace its superblock was
+/// mounted in, captured at mount time — so a bare `setns` leaves an
+/// already-mounted `/sys` showing the *host's* interfaces forever (this is why
+/// `ip netns exec` remounts `/sys`). `/proc/thread-self/net` resolves through
+/// the calling **thread's** nsproxy at open time, so it follows the `setns`
+/// with no remount. `/proc/self/net` would not: it resolves to the thread-group
+/// leader, which never entered the namespace.
+fn links_in_netns(netns_fd: RawFd) -> Vec<String> {
     std::thread::spawn(move || {
         // SAFETY: `netns_fd` is owned by the still-live `VmNet` for the duration
         // of this call; `borrow_raw` only wraps it for the `setns`.
         let ns = unsafe { BorrowedFd::borrow_raw(netns_fd) };
         setns(ns, CloneFlags::CLONE_NEWNET).expect("setns into vm netns");
-        Path::new(&format!("/sys/class/net/{name}")).exists()
+        let dev = std::fs::read_to_string("/proc/thread-self/net/dev")
+            .expect("read /proc/thread-self/net/dev in vm netns");
+        // Two header lines, then `  <name>: <counters…>` per interface.
+        dev.lines()
+            .skip(2)
+            .filter_map(|line| line.split(':').next())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
     })
     .join()
     .expect("netns check thread")
@@ -47,16 +66,30 @@ fn nft_table_exists(table: &str) -> Option<bool> {
     }
 }
 
+/// Whether the caller demands the privileged tests actually run. The privileged
+/// CI lane sets this so a missing prerequisite is a red build, not a silent pass.
+fn privileged_required() -> bool {
+    std::env::var("UMF_REQUIRE_PRIVILEGED")
+        .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
 #[test]
 fn native_vmnet_sets_up_and_tears_down_leak_free() {
     if !Uid::current().is_root() || !Path::new("/dev/net/tun").exists() {
-        eprintln!("skipping native_vmnet smoke: needs root + /dev/net/tun");
+        let why = "needs root + /dev/net/tun";
+        assert!(
+            !privileged_required(),
+            "UMF_REQUIRE_PRIVILEGED=1 but the native_vmnet smoke cannot run: {why}"
+        );
+        eprintln!("skipping native_vmnet smoke: {why}");
         return;
     }
 
     // An id unlikely to collide with a concurrent real VM run.
     let id: u32 = 60_343;
     let host_veth = format!("vmh{id}");
+    let guest_veth = format!("vmc{id}");
+    let bridge = format!("umfbr{id}");
     let tap = format!("umftap{id}");
     let table = format!("umf-vmfwd-{id}");
     let forwards = [PortForward {
@@ -75,10 +108,21 @@ fn native_vmnet_sets_up_and_tears_down_leak_free() {
         host_link_exists(&host_veth),
         "host veth present in host netns after setup",
     );
+
+    // The whole guest side — veth peer, bridge, tap — must be inside the netns,
+    // and the host veth must NOT be (that is what makes it the *host* end).
+    let inside = links_in_netns(net.netns_raw_fd());
+    for expected in [&tap, &bridge, &guest_veth] {
+        assert!(
+            inside.iter().any(|l| l == expected),
+            "`{expected}` present in VM netns after setup (netns has {inside:?})",
+        );
+    }
     assert!(
-        link_exists_in_netns(net.netns_raw_fd(), &tap),
-        "tap present in VM netns after setup",
+        !inside.iter().any(|l| l == &host_veth),
+        "host veth stays in the host netns (netns has {inside:?})",
     );
+
     if let Some(present) = nft_table_exists(&table) {
         assert!(present, "nft DNAT table present after setup");
     }

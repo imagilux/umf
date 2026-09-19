@@ -1,0 +1,21 @@
+---
+security:
+  - |
+    Updated ``rustls`` to 0.23.45, clearing **RUSTSEC-2026-0285**. Affected
+    versions accepted TLS 1.3 handshake messages sent at the wrong encryption
+    level when they followed a key-changing message in the same record — for
+    example a plaintext ``EncryptedExtensions`` packed into the same record as
+    the ``ServerHello`` — where RFC 8446 §5.1 requires the connection be
+    terminated with an ``unexpected_message`` alert. The handshake transcript
+    remains authenticated, so a network-position attacker could not alter or
+    complete a handshake; the practical effect was that a peer could send in
+    plaintext handshake messages that should have been encrypted, without
+    rustls rejecting the connection. It is the same defect as Go's
+    CVE-2025-61730.
+    UMF reaches rustls through ``reqwest`` on every registry pull and push, so
+    the fix covers the whole OCI distribution path. The update also carries
+    ``aws-lc-rs`` to 1.18.1 and ``rustls-webpki`` to 0.103.15; none of the three
+    raises the workspace's 1.85 minimum supported Rust version.
+    The advisory was published after the last push, so the previous green run
+    on ``main`` was already stale — the retroactive-vulnerability case the
+    scheduled advisory lane exists to catch.

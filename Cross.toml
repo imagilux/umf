@@ -25,10 +25,39 @@
 #      from `$CROSS_TARGET` because cross does not reliably export that variable
 #      into the pre-build shell, and reading it under `set -u` aborted the
 #      build right after the gperf install.
-#   3. builds libseccomp 2.6.0 from source against that musl compiler as a
-#      *static* archive and installs it at a fixed, arch-independent prefix
-#      (`/usr/local`, libdir `/usr/local/lib`) so a single `LIBSECCOMP_LIB_PATH`
-#      points at it for both musl targets.
+#   3. downloads the pinned libseccomp release tarball, **verifies its sha256**
+#      before unpacking (see below), then builds it against that musl compiler
+#      as a *static* archive and installs it at a fixed, arch-independent
+#      prefix (`/usr/local`, libdir `/usr/local/lib`) so a single
+#      `LIBSECCOMP_LIB_PATH` points at it for both musl targets.
+#
+# Integrity of the fetched tarball
+# --------------------------------
+# This is the highest-trust position in the supply chain: libseccomp applies the
+# default-deny seccomp profile to every RUN step, and it is *statically linked*
+# into the published musl binaries. An unverified `curl … | tar xz` would trust
+# GitHub's CDN, DNS inside the build container, and TLS termination on the
+# runner — and a substituted tarball would ship as a silently weakened sandbox
+# in every released artifact, not just a broken build.
+#
+# So the tarball is downloaded to disk, checked against a pinned sha256, and
+# only then unpacked. `sha256sum -c -` exits non-zero on a mismatch and `set -e`
+# aborts the Docker `RUN`, so a bad tarball fails the build rather than
+# silently linking. Both musl targets pin the same digest (same upstream file).
+#
+# Bumping the version means bumping `sha` in BOTH targets below, which is the
+# point: the digest change is visible in review. To re-derive it:
+#
+#     ver=2.6.0
+#     curl -fsSLO "https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz"
+#     sha256sum "libseccomp-${ver}.tar.gz"
+#
+# Upstream also publishes a detached GPG signature (`.tar.gz.asc`, signed by
+# 4B42A8CF07F299D554977EEFEA20F2DA97378973). Verifying that instead would root
+# trust in the maintainer key rather than a committed digest, at the cost of a
+# keyserver round-trip inside the build container — a fair trade to revisit, but
+# a pinned digest is the offline-friendly choice and matches the sovereignty
+# pillar (no network dependency beyond the artifact itself).
 #
 # How the Rust side picks it up
 # -----------------------------
@@ -64,10 +93,10 @@ passthrough = [
 
 [target.x86_64-unknown-linux-musl]
 pre-build = [
-    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"x86_64-linux-musl\"; ver=2.6.0; cd /tmp; curl -fsSL \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\" | tar xz; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
+    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"x86_64-linux-musl\"; ver=2.6.0; sha=\"83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc\"; cd /tmp; curl -fsSLO \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\"; echo \"${sha}  libseccomp-${ver}.tar.gz\" | sha256sum -c -; tar xzf \"libseccomp-${ver}.tar.gz\"; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
 ]
 
 [target.aarch64-unknown-linux-musl]
 pre-build = [
-    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"aarch64-linux-musl\"; ver=2.6.0; cd /tmp; curl -fsSL \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\" | tar xz; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
+    "set -eux; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install --assume-yes --no-install-recommends gperf; muslhost=\"aarch64-linux-musl\"; ver=2.6.0; sha=\"83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc\"; cd /tmp; curl -fsSLO \"https://github.com/seccomp/libseccomp/releases/download/v${ver}/libseccomp-${ver}.tar.gz\"; echo \"${sha}  libseccomp-${ver}.tar.gz\" | sha256sum -c -; tar xzf \"libseccomp-${ver}.tar.gz\"; cd \"libseccomp-${ver}\"; ./configure --host=\"${muslhost}\" --prefix=/usr/local --libdir=/usr/local/lib --enable-static --disable-shared --disable-python CC=\"${muslhost}-gcc\"; make -j\"$(nproc)\"; make install",
 ]

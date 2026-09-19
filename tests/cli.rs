@@ -752,19 +752,70 @@ fn run_bootable_image_auto_compiles() {
         .stderr(contains("boot-manifest label"));
 }
 
+/// Whether the caller demands the privileged smokes actually run. The
+/// privileged CI lane sets `UMF_REQUIRE_PRIVILEGED=1` so a lane that has lost
+/// its prerequisites fails loudly instead of reporting green on a skip.
+fn privileged_required() -> bool {
+    std::env::var("UMF_REQUIRE_PRIVILEGED")
+        .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
+/// Registry failures that are environmental (rate limit, DNS, refused, any
+/// transport error) mark the test skipped rather than failed — mirrors
+/// `is_pull_environmental` in the engine smokes. A shared runner IP tripping
+/// Docker Hub's anonymous limit is not a regression in `umf`.
+///
+/// Classification reads **only the final `error:` line** the CLI prints, never
+/// the whole captured stream. `umf build` resolves an unqualified reference
+/// across several registries and logs `warn!(… ?err …)` — a Debug-formatted
+/// error chain — for each candidate that fails before a later one succeeds
+/// (`crates/umf-builder/src/resolver/mod.rs`). Those warnings carry OS-level
+/// text like "connection refused" on a build that pulled perfectly well, so
+/// scanning the full stderr would let a *genuine* build failure be waved
+/// through as environmental — the vacuous green this lane exists to prevent.
+fn is_pull_environmental(stderr: &str) -> bool {
+    // `error sending request for url` is `reqwest::Error`'s cause-less Display,
+    // which is what `RegistryError::Distribution` ("OCI distribution: {0}")
+    // renders for every transport failure — TLS, proxy, connect timeout, reset.
+    // It is the form umf actually emits; the rest cover the messages that reach
+    // the error line with their source attached.
+    const ENVIRONMENTAL: &[&str] = &[
+        "error sending request for url",
+        "toomanyrequests",
+        "rate limit",
+        "name or service not known",
+        "connection refused",
+        "network is unreachable",
+        "connection reset by peer",
+        "timed out",
+    ];
+    stderr
+        .lines()
+        .rfind(|l| l.trim_start().starts_with("error:"))
+        .map(str::to_lowercase)
+        .is_some_and(|line| ENVIRONMENTAL.iter().any(|needle| line.contains(needle)))
+}
+
 /// Full CLI end-to-end: `umf build` a tiny recipe, then `umf run` the
 /// resulting tag and assert exit propagation. The acceptance criterion
 /// in one test.
 ///
 /// Gated on `UMF_ENGINE_SMOKE=1` — same gate as the build smoke tests
 /// (needs network for the base-image pull + `CAP_SYS_ADMIN` for the
-/// overlay mount the build engine uses).
+/// overlay mount the build engine uses). The privileged lane sets it, and
+/// selects this target explicitly; `UMF_REQUIRE_PRIVILEGED=1` there turns a
+/// missing gate into a failure so the lane cannot silently run nothing.
 #[test]
 fn build_then_run_round_trips_exit_code() {
-    if std::env::var("UMF_ENGINE_SMOKE")
-        .map(|v| v != "1")
-        .unwrap_or(true)
+    // Same 1/true/yes spelling every other smoke in the workspace accepts
+    // (`smoke_enabled` in the engine and builder smoke tests).
+    if !std::env::var("UMF_ENGINE_SMOKE").is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
     {
+        assert!(
+            !privileged_required(),
+            "UMF_REQUIRE_PRIVILEGED=1 but UMF_ENGINE_SMOKE is not set: the end-to-end \
+             build/run acceptance test would have been skipped"
+        );
         eprintln!("skipping: set UMF_ENGINE_SMOKE=1 to run this test");
         return;
     }
@@ -772,21 +823,33 @@ fn build_then_run_round_trips_exit_code() {
     let ctx = tempfile::tempdir().expect("ctx tempdir");
     let layout_dir = tempfile::tempdir().expect("layout tempdir");
     let recipe = ctx.path().join("smoke.umf");
+    // Base is overridable (UMF_SMOKE_BASE_IMAGE) so CI can point at a mirror
+    // and avoid Docker Hub's anonymous rate limit, exactly as the engine and
+    // builder smokes do. Only `/bin/sh` is required of it.
+    let base = std::env::var("UMF_SMOKE_BASE_IMAGE").unwrap_or_else(|_| "alpine:3.21".to_string());
     std::fs::write(
         &recipe,
-        "FROM alpine:3.21\nENTRYPOINT [\"/bin/sh\", \"-c\", \"exit 17\"]\n",
+        format!("FROM {base}\nENTRYPOINT [\"/bin/sh\", \"-c\", \"exit 17\"]\n"),
     )
     .expect("write recipe");
 
     let tag = "example.invalid/run-smoke:latest";
 
     // Build.
-    umf()
+    let build = umf()
         .args(["build", "--tag", tag, "--layout-dir"])
         .arg(layout_dir.path())
         .arg(&recipe)
-        .assert()
-        .success();
+        .output()
+        .expect("spawn umf build");
+    if !build.status.success() {
+        let stderr = String::from_utf8_lossy(&build.stderr);
+        if is_pull_environmental(&stderr) {
+            eprintln!("skipping: environmental pull failure: {stderr}");
+            return;
+        }
+        panic!("umf build failed: {stderr}");
+    }
 
     // Run. Exit 17 must propagate as the CLI's exit code.
     umf()
@@ -808,7 +871,12 @@ fn doctor_reports_host_state() {
         .stdout(contains("VM / bootable"))
         .stdout(contains("STATUS"))
         .stdout(contains("container runtime"))
-        .stdout(contains("qemu-system-x86_64"))
+        // The QEMU row is derived from `Architecture::host()`, so this must
+        // track the arch the tests are RUNNING on, not x86_64 — the aarch64 CI
+        // lane executes this same assertion on an ARM runner.
+        .stdout(contains(
+            umf_core::architecture::Architecture::host().qemu_binary_name(),
+        ))
         .stdout(contains("/dev/kvm"));
 }
 
