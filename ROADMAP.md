@@ -119,20 +119,25 @@ Two design notes worth keeping:
 
 ## P1 — correctness and resource defects
 
-### P1.1 — Every VM spawn leaks a tempdir · broken · unfiled
+### P1.1 — Every VM spawn leaks a tempdir · ~~broken~~ fixed
 
-`crates/umf-vmm/src/backends/qemu/spawn.rs:87-95` calls `TempDir::keep()` on
-the QMP socket directory and on the writable UEFI VARS copy, and nothing ever
-removes them: there is no `Drop` impl anywhere in `umf-vmm`. The code comment
-says *"today we just let the OS reclaim on process exit"* — which is not true
-of `/tmp`; the directories persist until reboot or a `tmpfiles` sweep.
+**Fixed.** Both backends detached their scratch directories with
+`TempDir::keep()` and nothing ever removed them — the QMP/API socket's parent
+in each, plus the writable UEFI VARS copy under QEMU. The in-code justification
+was that the OS reclaims them at process exit, which is not true of the system
+temp directory. A bootable build spawns one micro-VM per `RUN` step, so the
+leak grew with recipe length.
 
-This matters more than it first looks. A bootable build spawns **one micro-VM
-per `RUN` step**, so a ten-step recipe leaks ten directories per build, each
-potentially holding a multi-hundred-kilobyte VARS copy.
+`VmHandle` now **owns** the `TempDir` values instead, so `TempDir`'s own `Drop`
+performs the cleanup. That was preferred over the `Drop for VmHandle` the old
+comment anticipated: a hand-written `remove_dir_all` is a second place for the
+path logic to be wrong, whereas ownership makes the cleanup structural. The
+field is private, so nothing outside the crate can detach it and reintroduce
+the leak.
 
-Fix is a `Drop` on `VmHandle` that removes the paths it owns, which the
-existing comment already anticipates.
+Verified two ways: a unit test that fails if the directories survive the
+handle, and a before/after count across the CLI suite showing no directories
+left behind.
 
 ### P1.2 — Extending a `type=bootable` image · absent · [#28](https://github.com/imagilux/umf/issues/28)
 
