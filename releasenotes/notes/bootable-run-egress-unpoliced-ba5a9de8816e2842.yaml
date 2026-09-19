@@ -1,0 +1,30 @@
+---
+security:
+  - |
+    Documented, and warned about at build time, that the default-deny SSRF
+    policy does **not** cover a bootable build's ``RUN`` steps.
+    Container builds are policed either way — the rootful path turns the policy
+    into a ``forward``-hook drop set on its NAT table, the rootless path checks
+    every connect in the userspace network stack. A bootable ``RUN`` executes in
+    a micro-VM that reaches the network through the VMM's own user-mode stack,
+    which UMF does not program and which has no notion of the address
+    categories, so host services, the cloud-metadata endpoint and the local
+    network are reachable from it, and ``--rootless-net-allow`` has no effect.
+    The specification previously closed this section by asserting that
+    "outbound egress from a RUN step is namespaced, and host-internal
+    destinations are denied by default", which was false for that shape; it now
+    scopes the guarantee to container builds and calls out the exception.
+    ``umf build`` warns once per run when it applies, so an operator is not
+    silently unprotected. Enforcement for the bootable shape is still open.
+    Until then, block what must stay unreachable at the host firewall, or build
+    on a host with no route to it.
+other:
+  - |
+    Corrected a documentation error introduced in the previous release notes
+    cycle, which claimed that a bootable build's ``RUN`` steps had no network
+    access at all. They do: the micro-VM is attached to a virtio NIC on the
+    VMM's user-mode stack, and the generated run initramfs brings ``eth0`` up
+    and takes a DHCP lease. The claim came from reading the micro-VM spec's
+    ``net: None`` as "no NIC", when it means "no pre-built tap device to
+    attach" — the Cloud Hypervisor port-forward path. Both readings are now
+    pinned by tests so the mistake cannot recur silently.

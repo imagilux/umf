@@ -36,25 +36,29 @@ The spec describes [EXPOSE](specification.md#expose) as emitting an actual defau
 
 So treat EXPOSE's default-deny as a guarantee of init-system bootable images; for the other shapes, enforce reachability with your runtime or an explicit boot-time hook.
 
-### Network access from a bootable build's `RUN`
+### The SSRF policy does not cover a bootable build's `RUN`
 
-`RUN` steps in a **bootable** build execute in a micro-VM that is launched with
-no network device, so they have **no network access at all**. A step that
-installs packages or fetches a URL (`RUN apk add curl`, `RUN curl -o …`) cannot
-work there; it fails with the package manager's or the tool's own network
-error, not a UMF one.
+`RUN` steps in a **bootable** build do have network access — the micro-VM gets
+a virtio NIC on the VMM's user-mode network stack, and the generated run
+initramfs brings `eth0` up and takes a DHCP lease — but that egress is **not
+policed**. The [default-deny SSRF set](specification.md#run-step-network-egress)
+that container builds enforce (loopback, link-local including the
+`169.254.169.254` cloud-metadata IP, RFC1918, IPv6 ULA, CGNAT) does not apply,
+and `--rootless-net-allow` / `UMF_ROOTLESS_NET_ALLOW` have no effect on it.
 
-Container builds are unaffected — their `RUN` steps get a policed egress
-(rootful veth + NAT, or a rootless userspace backend).
+The reason is structural: a container `RUN` egresses through a namespace UMF
+programs — a `forward`-hook drop set on the NAT table when rootful, a
+connect-time check in the userspace stack when rootless. A bootable `RUN`
+egresses through the VMM's own user-mode stack, which UMF does not program and
+which has no notion of those categories.
 
-- **Spec vs. impl.** [RUN](specification.md#run) says *"The DSL surface is
-  identical either way — only the underlying runner differs."* Network reach is
-  the exception: it is not identical.
+So in a bootable build a `RUN` step can reach the host's own services, the
+cloud-metadata endpoint, and the local network. `umf build` warns once per run
+when this applies.
 
-Workarounds: bake anything network-dependent into the userland image that `ADD
-<oci-ref> /` lays down, or `ADD <url> <dst>` the payload at build time (that
-fetch happens on the host, which does have egress) and have the `RUN` step
-consume the local file.
+Mitigations until it is closed: build on a host with no route to whatever must
+stay unreachable, or block it at the host firewall. Container builds are
+unaffected.
 
 ## Rootless builds
 

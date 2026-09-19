@@ -377,3 +377,35 @@ fn aarch64_pflash_firmware_emits_two_pflash_drives_not_bios() {
     assert!(pflash[1].contains("file=/run/umf/AAVMF_VARS.fd"));
     assert!(!pflash[1].contains("readonly=on"));
 }
+
+/// A direct-kernel micro-VM spec — `net: None`, no port forwards, the exact
+/// shape the builder hands us for a bootable `RUN` step — still gets a NIC.
+///
+/// `VmSpec::net` means "a pre-built `TapNet` to attach" (the Cloud Hypervisor
+/// port-forward path); QEMU ignores it and always attaches its own user-mode
+/// stack. Reading `net: None` as "this VM has no network" is a mistake that has
+/// been made once already, and it propagated into the docs before anyone dumped
+/// the argv. This pins the real behaviour so the next reader sees it asserted
+/// rather than inferred.
+#[test]
+fn a_micro_vm_spec_with_no_tapnet_still_gets_a_nic() {
+    let mut spec = base_spec();
+    spec.boot = BootSource::DirectKernel {
+        kernel: PathBuf::from("/k/vmlinuz"),
+        initrd: PathBuf::from("/k/initrd.img"),
+        cmdline: "console=ttyS0 quiet panic=1".into(),
+    };
+    spec.net = None;
+    spec.port_forwards = Vec::new();
+
+    let args = build_qemu_args(&spec, None, "microvm");
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("-netdev user,id=net0"),
+        "a micro-VM must still get user-mode networking: {joined}"
+    );
+    assert!(
+        joined.contains("virtio-net-pci,netdev=net0"),
+        "the netdev must be attached to a guest NIC: {joined}"
+    );
+}

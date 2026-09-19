@@ -56,30 +56,60 @@ before any code is worth writing:
    into a multi-hour compile; an explicit `--build-missing` keeps the failure
    fast but means the air-gapped case needs a flag.
 
-### P0.2 — Bootable `RUN` has no network, but the spec claims parity · absent · unfiled
+### P0.2 — The SSRF policy does not cover a bootable build's `RUN` · partial · unfiled
 
-`specification.md:334` states: *"The DSL surface is identical either way — only
-the underlying runner differs."* It is not identical. Container `RUN` steps get
-a policed egress (veth+NAT rootful, smoltcp or pasta rootless). Bootable `RUN`
-steps get `net: None` (`crates/umf-builder/src/vm_runner.rs:335`) — the
-micro-VM has no network device at all.
+**This item was previously recorded wrongly, and the correction matters more
+than the original claim.** It said bootable `RUN` steps had no network at all,
+reading `net: None` in the micro-VM spec as "no NIC". That field means only "no
+pre-built `TapNet`", which is the Cloud Hypervisor port-forward path; its own
+doc says so. The QEMU backend attaches `-netdev user,id=net0` plus a
+`virtio-net-pci` **unconditionally** (verified by dumping the generated
+argv for a micro-VM spec), and the generated run initramfs brings `eth0` up and
+runs `udhcpc`. Bootable `RUN` steps have had working network access all along.
 
-So `RUN apk add curl` works in a container build and cannot work in a bootable
-one. This is not recorded in `docs/known-limitations.md`, which means the first
-time an author meets it is at build time, with an error from the package
-manager rather than from UMF.
+A module-survey agent reported the real version of this — *"bootable-build
+micro-VM RUN steps get no umf-networking egress and no SSRF policy"* — and it
+was refuted here on the wrong grounds. That refutation was the error.
 
-Two acceptable resolutions, in order of preference:
+**The actual gap.** Bootable `RUN` egress is not policed. Both container paths
+enforce the default-deny SSRF set — the rootful path turns the policy into a
+`forward`-hook drop set (`crates/umf-networking/src/lib.rs:231`), the rootless
+path checks each connect in the smoltcp gateway — while the micro-VM reaches
+the network through the VMM's own user-mode stack, which UMF does not program.
+So a bootable `RUN` can reach host services, the cloud-metadata endpoint and
+the local network, and `--rootless-net-allow` has no effect on it.
 
-- Wire a network device into the micro-VM spec and route it through
-  `umf-networking` with the same SSRF policy the container path enforces. The
-  plumbing already exists — `VmNet` does netns + tap + DNAT for `umf run`.
-- If that is deferred, the spec's parity sentence must be corrected and the
-  limitation documented, so the promise matches the binary.
+**Done so far:** the specification's closing claim (*"outbound egress from a RUN
+step is namespaced, and host-internal destinations are denied by default"*) was
+false for this shape and now scopes itself to container builds; the limitation
+is documented; and `umf build` warns once per run when it applies, so an
+operator is not silently unprotected.
 
-Note the corollary: because the micro-VM has no NIC, there is currently nothing
-for an SSRF policy to police on that path. The absence of policy enforcement in
-`vm_runner.rs` is a consequence of the missing network, not a separate hole.
+**Enforcement is still open**, and deliberately not bundled with the above. The
+design is worked out:
+
+- The micro-VM needs a netns + tap whose `forward` hook carries the same
+  `deny_cidrs` set `ContainerNet` already builds from the policy, plus a
+  masquerade for outbound. `VmNet` has the netns/veth/bridge/tap half but does
+  DNAT only — no masquerade, no deny chain — so this is a new composition of
+  existing pieces rather than new primitives.
+- The QEMU backend must honour `spec.net`, which it currently ignores entirely
+  (Cloud Hypervisor already honours it: tap + `setns` before exec).
+- There is a privilege trade-off to settle first. A tap needs `CAP_NET_ADMIN`,
+  which a bootable build does not otherwise require — KVM needs group access to
+  `/dev/kvm`, not root. Enforcing unconditionally would regress unprivileged
+  bootable builds; falling back to the unpoliced stack makes the guarantee
+  privilege-dependent, which is what the container path already does but should
+  be a conscious choice rather than an accident.
+
+**Two things block starting it**, and both are worth stating plainly:
+
+1. The privilege question above is a policy call, not an implementation detail.
+2. **Nothing can verify it.** No CI lane runs a bootable `RUN` step at all — the
+   boot-smoke lane compiles and boots a disk but executes no build-time `RUN` —
+   so a tap + nft egress path would ship untested. That is precisely how the
+   VmNet smoke came to be broken and invisible (#32). A lane that exercises a
+   bootable `RUN` should land before, or with, the enforcement.
 
 ### P0.3 — Parser rejects and silently mangles ordinary Docker-compatible input · ~~broken~~ fixed
 
@@ -184,8 +214,14 @@ reproducing it.
 Refuted so far, recorded so they are not re-raised: `prune_erofs_cache` evicting
 live entries (a guard test covers exactly that case); Ctrl-C on `umf run --vmm`
 SIGKILLing the guest (fixed in #47); quoted `#` truncating a `RUN` payload;
-backslashes being a lexical error; the bootable micro-VM lacking an SSRF policy
-(it has no NIC to police — see P0.2).
+backslashes being a lexical error.
+
+One entry moved the other way. *"Bootable-build micro-VM RUN steps get no
+umf-networking egress and no SSRF policy"* was refuted here on the grounds that
+the micro-VM had no NIC to police. That reasoning was wrong — it does have one —
+and the finding itself was correct. It is now P0.2. The lesson generalises: a
+refutation needs the same standard of evidence as a finding, and a plausible
+mechanism is not evidence.
 
 ### P2.2 — Close the remaining CI coverage gaps · [#31](https://github.com/imagilux/umf/issues/31) [#32](https://github.com/imagilux/umf/issues/32) [#33](https://github.com/imagilux/umf/issues/33) [#34](https://github.com/imagilux/umf/issues/34)
 

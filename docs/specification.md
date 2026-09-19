@@ -125,7 +125,7 @@ A `RUN` step may reach the network during the build (to fetch packages, clone so
     - `pasta`: the same userspace crossing via the external `passt` / `pasta` helper (opt-in; requires the package installed).
     - `none`: loopback only, no egress.
 
-**Default-deny SSRF policy.** Rootless egress refuses connections to host-internal destinations by default, checked at connect time on the literal destination address: loopback (and the unspecified address), link-local (including the `169.254.169.254` cloud-metadata IP), RFC1918, IPv6 unique-local, and CGNAT shared space. This is enforcement, not advice, and mirrors the block-all posture of [EXPOSE](#expose): a build's RUN steps cannot reach the host's own services, the cloud-metadata endpoint, or the local network unless an operator opts in. Re-allow categories with `--rootless-net-allow` (or `UMF_ROOTLESS_NET_ALLOW`), for instance to reach an internal package mirror:
+**Default-deny SSRF policy.** Container-build egress — rootful and rootless alike — refuses connections to host-internal destinations by default, checked on the destination address (at connect time for the rootless userspace stack; as a `forward`-hook drop set for the rootful veth path): loopback (and the unspecified address), link-local (including the `169.254.169.254` cloud-metadata IP), RFC1918, IPv6 unique-local, and CGNAT shared space. This is enforcement, not advice, and mirrors the block-all posture of [EXPOSE](#expose): a build's RUN steps cannot reach the host's own services, the cloud-metadata endpoint, or the local network unless an operator opts in. Re-allow categories with `--rootless-net-allow` (or `UMF_ROOTLESS_NET_ALLOW`), for instance to reach an internal package mirror:
 
 ```bash
 umf build --rootless-net-allow rfc1918 -t myapp:1.0 .
@@ -133,7 +133,11 @@ umf build --rootless-net-allow rfc1918 -t myapp:1.0 .
 
 **The same policy governs `ADD <url>`.** A recipe's remote fetches are checked against this identical default-deny set, so `ADD` cannot reach a host-internal destination that `RUN` is refused — otherwise the constraint would only ever be one directive away from being bypassed. Two details make that hold: the destination is resolved by UMF and the vetted address is pinned for the connection (so a name cannot re-resolve to something else between the check and the connect), and redirects are followed manually with every hop re-checked (so a public URL cannot `302` into the metadata endpoint). A refusal names the address and the category that denied it, and the same `--rootless-net-allow` / `UMF_ROOTLESS_NET_ALLOW` escape hatch re-opens a category for an internal mirror. This applies to rootful and rootless builds alike, since the fetch is performed by the build process itself rather than inside a RUN sandbox.
 
-The backends, the address categories, and the operator workflow are detailed in the reference-implementation docs ([CLI](cli.md), [Prerequisites](prerequisites.md), [Troubleshooting](troubleshooting.md)). The normative point is the security posture: outbound egress from a RUN step is namespaced, and host-internal destinations are denied by default.
+**Bootable builds are the exception, and it is a real one.** A bootable build's `RUN` steps execute in a micro-VM, which reaches the network through the VMM's own user-mode network stack rather than through a namespace UMF programs. That stack has no notion of the address categories above, so **the default-deny set is not enforced for bootable builds**: a `RUN` step there can reach the host's services, the cloud-metadata endpoint and the local network, and `--rootless-net-allow` has no effect on it.
+
+Treat the SSRF guarantee as a property of *container* builds until this is closed. For a bootable build, the mitigations are the ordinary ones: build on a host with no route to what must stay unreachable, or block it at the host firewall.
+
+The backends, the address categories, and the operator workflow are detailed in the reference-implementation docs ([CLI](cli.md), [Prerequisites](prerequisites.md), [Troubleshooting](troubleshooting.md)). The normative point is the security posture: outbound egress from a container build's RUN step is namespaced, and host-internal destinations are denied by default.
 
 ---
 
