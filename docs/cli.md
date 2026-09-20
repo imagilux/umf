@@ -114,6 +114,25 @@ umf compile local/appliance:1.0                  # into the block cache (for `um
 umf compile local/appliance:1.0 --fs ext4 -o ./disk.raw   # writable ext4 root
 ```
 
+## Environment variables
+
+Every behaviour below also has a flag or a sensible default; these are escape
+hatches for hosts that need one, and several are named in error text the
+operator will hit before they find this table.
+
+| Variable | Effect |
+|----------|--------|
+| `UMF_LAYER_CACHE` | Layer-cache strategy for `build` and `run`: `auto` (default) and `erofs` encode cached lower layers as erofs images; `unpack` forces the pure-Rust merge-unpack. `auto`/`erofs` still fall back to unpacking when the host cannot encode or mount erofs. An unrecognised value warns and behaves as `auto`. |
+| `UMF_OVERLAY_BACKEND` | Force the overlay backend: `kernel` or `fuse`. Unset, UMF picks one appropriate to the process (kernel overlay where the user namespace allows it). |
+| `UMF_MAX_UNCOMPRESSED_LAYER_BYTES` | Ceiling on a single layer's **decompressed** size, in bytes. Default 32 GiB — generous for any real layer, while a decompression bomb (1000×+) trips it long before it fills the disk. Raise it only for a genuinely enormous legitimate layer. |
+| `UMF_REGISTRY_TIMEOUT` | Idle read timeout for registry HTTP traffic, in whole seconds. Default 120. This is a per-read timeout, so a slow-but-progressing large pull is unaffected; only a wedged or half-open socket trips it. Raise it for slow air-gapped mirrors. |
+| `UMF_REGISTRY_USERNAME` / `UMF_REGISTRY_PASSWORD` | Registry credentials, consulted after explicit `--username` / `--password-stdin` and before `~/.docker/config.json`. |
+| `UMF_ROOTLESS_NET` / `UMF_ROOTLESS_NET_ALLOW` | Rootless egress backend and SSRF re-allow categories — the env form of `--rootless-net` / `--rootless-net-allow`. |
+| `UMF_RUN_CPUS` | vCPU count for a bootable build's per-`RUN` micro-VM. Defaults to the host's available parallelism. |
+| `UMF_RUN_MEMORY_MIB` | Guest memory for that micro-VM, in MiB. Defaults to a host-derived value clamped to `[1 GiB, 8 GiB]`; an explicit value is honoured above that clamp. |
+| `UMF_RUN_TIMEOUT_SECS` | Wall-clock timeout for a per-`RUN` micro-VM. Defaults to 5 minutes, or 20 under TCG (no KVM), where everything is far slower. |
+| `UMF_APPARMOR_PROFILE` / `UMF_SELINUX_LABEL` / `UMF_SELINUX_MOUNT_LABEL` | Optional LSM confinement for `RUN` steps — see [Prerequisites](prerequisites.md). |
+
 ## Running
 
 ### `umf run`

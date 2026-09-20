@@ -522,7 +522,7 @@ Emits actual nftables firewall rules in the image. EXPOSE has enforcement semant
 
 Default policy is **block all** — only explicitly exposed ports are reachable.
 
-In the current implementation this enforcement is realized for **init-system bootable images** (`ENTRYPOINT systemd` / `openrc`), where the generated `nftables` service loads the ruleset at boot. Container builds record the exposed ports as OCI image-config metadata, and appliance images (a binary-path `ENTRYPOINT`) write the ruleset without an init system to auto-load it (see [Known limitations](known-limitations.md#expose-firewall-enforcement)).
+In the current implementation this enforcement is realized for **init-system bootable images** (`ENTRYPOINT systemd` / `openrc`), where the generated `nftables` service loads the ruleset at boot. Container builds record the exposed ports as OCI image-config metadata. An **appliance** image (a binary-path `ENTRYPOINT`) has no service manager to load the ruleset, so a bootable build that combines `EXPOSE` with an appliance `ENTRYPOINT` is **rejected** rather than shipped: an image claiming default-deny with no firewall behind it would be worse than none. The same fail-closed rule applies when the userland ships no `nft` binary — see [Known limitations](known-limitations.md#expose-firewall-enforcement).
 
 The protocol is optional and defaults to `tcp` (`EXPOSE 8080` == `EXPOSE 8080/tcp`, regular Docker style), and one `EXPOSE` may list several ports on a line.
 

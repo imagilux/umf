@@ -491,6 +491,31 @@ the spec had promised them. It now names the path as unimplemented and points
 at `known-limitations.md`, where the gap and its container-build-then-`ADD`
 workaround are now recorded.
 
+**Confirmed — the `EXPOSE` appliance limitation was inverted, in three places.**
+`specification.md`, `known-limitations.md` and `.claude/CLAUDE.md` all said an
+appliance bootable image *writes* `/etc/nftables.conf` and simply has no init to
+load it. The build is in fact **rejected** (`ExposeUnenforceable`), before
+anything is written. The `nft`-binary precondition — an init-system image whose
+userland ships no `nft` is refused too — was documented nowhere, though the
+error names it.
+
+Worth noting what this was *not*: the code was correct and already had tests for
+both refusals. Only the prose had drifted, in the direction that matters most —
+telling an operator a build succeeds with a caveat when it actually fails. The
+appliance test now also asserts nothing is written, which is the specific claim
+the docs got wrong.
+
+**Confirmed, count right and name wrong — undocumented `UMF_*` variables.**
+Seven operator-facing variables had no documentation: `UMF_LAYER_CACHE`,
+`UMF_OVERLAY_BACKEND`, `UMF_MAX_UNCOMPRESSED_LAYER_BYTES`,
+`UMF_REGISTRY_TIMEOUT`, `UMF_RUN_CPUS`, `UMF_RUN_MEMORY_MIB`,
+`UMF_RUN_TIMEOUT_SECS`. The lead's "~7" was right, but it named
+`UMF_LAYER_STRATEGY`, which does not exist anywhere in the tree — the real one
+is `UMF_LAYER_CACHE`. A sweep also has to discard the `UMF_*` names that are
+shell variables inside the *generated* init script (`UMF_MODS`, `UMF_IP`, …)
+and the CI gates (`UMF_REQUIRE_PRIVILEGED`, `UMF_REQUIRE_MKFS`), none of which
+belong in operator documentation.
+
 ---
 
 ## P3 — documentation truth

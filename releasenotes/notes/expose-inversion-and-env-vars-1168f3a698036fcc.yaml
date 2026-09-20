@@ -1,0 +1,19 @@
+---
+other:
+  - |
+    Corrected an inverted description of ``EXPOSE`` on appliance images. The
+    specification, ``known-limitations.md`` and the project guide all said an
+    appliance bootable image (binary-path ``ENTRYPOINT``) *writes*
+    ``/etc/nftables.conf`` and merely lacks an init to load it. It does not:
+    the build is **rejected**, before anything is written. The same fail-closed
+    rule applies when the userland ships no ``nft`` binary, which was
+    documented nowhere at all even though the error names it. The behaviour was
+    always correct and tested — only the prose was wrong.
+  - |
+    ``docs/cli.md`` gains an environment-variable reference covering
+    ``UMF_LAYER_CACHE``, ``UMF_OVERLAY_BACKEND``,
+    ``UMF_MAX_UNCOMPRESSED_LAYER_BYTES``, ``UMF_REGISTRY_TIMEOUT``,
+    ``UMF_RUN_CPUS``, ``UMF_RUN_MEMORY_MIB`` and ``UMF_RUN_TIMEOUT_SECS``,
+    alongside the registry, rootless-egress and LSM variables that were already
+    documented elsewhere. Several are named in error text an operator hits
+    before finding any documentation for them.
