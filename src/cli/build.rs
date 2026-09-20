@@ -52,7 +52,15 @@ pub(crate) enum CliBuildError {
     MissingContainerTag(String),
     #[error("--tag is required for bootable builds (got `FROM {0}`)")]
     MissingBootableTag(String),
-    #[error("--secret is only meaningful for container builds")]
+    // Not "meaningless here" — the spec says the secret is mounted "inside the
+    // `RUN` step's container **or VM**", and its worked example is `sbsign`,
+    // a Secure Boot signing step that only makes sense in a bootable build.
+    // The VM RUN backend simply has no secret plumbing yet, so say that
+    // rather than telling the author their intent was wrong.
+    #[error(
+        "--secret is not yet supported for bootable builds: the micro-VM `RUN` backend has \
+         no secret mount (container builds do). Track it in docs/known-limitations.md"
+    )]
     SecretOnVm,
     #[error("--staging-keep is only meaningful for bootable builds")]
     StagingKeepOnContainer,
@@ -474,9 +482,11 @@ fn run_vm_build(
         .parse()
         .map_err(|e: oci_client::ParseError| CliBuildError::InvalidTag(e.to_string()))?;
 
-    // Secrets are container-engine specific (the bootable RUN backend is qemu,
-    // wired separately). `--push` is fine — a bootable image is a plain OCI
-    // image like any other.
+    // The spec promises secrets in a VM `RUN` step too ("inside the `RUN`
+    // step's container or VM"), and its own example — `sbsign` against a
+    // signing key — is a bootable-only workflow. The micro-VM backend just
+    // has no secret mount yet, so this is an unimplemented path rather than a
+    // meaningless one. `--push` is fine: a bootable image is a plain OCI image.
     if !args.secret_specs.is_empty() {
         return Err(CliBuildError::SecretOnVm);
     }
@@ -664,5 +674,37 @@ pub(crate) fn read_secret_material(input: &SecretInput) -> std::io::Result<Vec<u
                 format!("environment variable {name} is not set"),
             )
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bootable `--secret` rejection must not claim the flag is
+    /// meaningless there.
+    ///
+    /// The spec mounts the secret "as a tmpfs file inside the `RUN` step's
+    /// container **or VM**", and its worked example is
+    /// `sbsign --key /run/secrets/key` — Secure Boot signing, which only makes
+    /// sense in a bootable build. The micro-VM `RUN` backend simply has no
+    /// secret mount yet. That is an unimplemented path, not a misuse, and the
+    /// old text ("only meaningful for container builds") told authors their
+    /// intent was wrong when the spec had promised them exactly this.
+    #[test]
+    fn the_bootable_secret_error_says_unimplemented_not_meaningless() {
+        let text = CliBuildError::SecretOnVm.to_string();
+        assert!(
+            !text.contains("only meaningful for container builds"),
+            "must not call a spec-promised capability meaningless: {text}",
+        );
+        assert!(
+            text.contains("not yet supported"),
+            "should name it as unimplemented: {text}",
+        );
+        assert!(
+            text.contains("known-limitations"),
+            "should point at where the gap is tracked: {text}",
+        );
     }
 }
