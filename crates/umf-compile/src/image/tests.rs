@@ -579,3 +579,36 @@ fn mkfs_available_or_skip(fs: RootfsFs) -> Option<()> {
     eprintln!("skipping end-to-end {fs} projection: `{tool}` not on PATH");
     None
 }
+
+/// Lead from the audit backlog (#40): the `BootloaderUnavailable` remedies
+/// must be things that exist.
+///
+/// It previously read *"install systemd-boot on the host, or pass
+/// --bootloader-path"*. `resolve_bootloader`'s own doc comment says there is
+/// **no host fallback** — the disk has to be reproducible from the image
+/// alone — and that the override argument is a library test seam with no CLI
+/// flag behind it. An operator who hit this error did two things that could
+/// not help and then searched `--help` for a flag that was never there.
+#[test]
+fn the_missing_bootloader_error_offers_only_remedies_that_exist() {
+    let err = CompileError::BootloaderUnavailable {
+        kind: "systemd-boot".to_string(),
+        tried: "usr/lib/systemd/boot/efi/systemd-bootx64.efi (in image)".to_string(),
+    };
+    let text = err.to_string();
+
+    assert!(
+        !text.contains("--bootloader-path"),
+        "names a CLI flag that does not exist: {text}",
+    );
+    assert!(
+        !text.contains("on the host"),
+        "offers a host fallback the resolver explicitly does not have: {text}",
+    );
+    // The two real ways out.
+    assert!(
+        text.contains("image rootfs"),
+        "must point at the in-image bootloader path: {text}",
+    );
+    assert!(text.contains("uki"), "must offer the uki flavor: {text}");
+}

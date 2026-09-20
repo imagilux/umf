@@ -1,0 +1,23 @@
+---
+fixes:
+  - |
+    The "no bootloader found" error offered two remedies that do not exist. It
+    read *"ship one in the image, install systemd-boot on the host, or pass
+    --bootloader-path"*, but ``resolve_bootloader`` documents that there is no
+    host fallback — a projected disk has to be reproducible from the image
+    alone — and the override argument behind ``--bootloader-path`` is a library
+    test seam with no CLI flag. An operator following the text did two useless
+    things and then searched ``--help`` for a flag that was never there. It now
+    names the two real ways out: install systemd-boot into the image rootfs, or
+    build with ``LABEL org.imagilux.umf.flavor=uki``.
+other:
+  - |
+    ``docs/prerequisites.md`` lists ``ukify`` (``systemd-ukify`` +
+    ``systemd-boot-efi``). It is a hard host requirement for
+    ``flavor=uki`` — the UKI is assembled by shelling out to it, with no
+    in-process fallback — and appeared nowhere in the host-setup checklist.
+  - |
+    ``docs/known-limitations.md`` documents that a UKI can only be projected
+    for the host architecture. ``ukify`` takes systemd's EFI stub from the
+    host, so a cross-architecture UKI would wrap a foreign kernel in the wrong
+    stub; ``umf compile`` refuses rather than emit an unbootable disk.

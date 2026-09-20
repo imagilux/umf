@@ -80,6 +80,30 @@ There is deliberately **no fallback**. A root the operator asked to be `ext4` mu
 - **Impact.** `umf compile` with no `--fs` still needs nothing installed — the default `squashfs` keeps the projector pure-Rust and usable on a bare air-gapped node. Only the opt-in paths carry the dependency.
 - **Both tools run unprivileged** and preserve ownership, modes and device nodes, so this adds no privilege requirement.
 
+### Cross-architecture UKI projection
+
+`umf compile` refuses to build a Unified Kernel Image for an architecture other
+than the host's:
+
+```
+cannot build a UKI for aarch64 on a x86_64 host: ukify embeds the host's EFI
+stub, so a cross-arch UKI is unbootable; build on a aarch64 host, or use
+`LABEL org.imagilux.umf.flavor=systemd-boot`
+```
+
+Same-architecture UKI projection is unaffected, and the classic `systemd-boot`
+flavor has no such restriction — it reads its bootloader from the image rootfs,
+which already matches the target architecture.
+
+The cause is `ukify`: it wraps the kernel in systemd's EFI stub and takes that
+stub from the **host**, with no option to source the target's. A cross-arch UKI
+would embed (say) an x86 stub around an aarch64 kernel and produce a disk that
+cannot boot, so refusing is the alternative to emitting that disk silently.
+
+Lifting this means sourcing the stub per-architecture from the image rootfs —
+where a cross-arch build's own `systemd-boot-efi` already lives — rather than
+from the host.
+
 ### `grub` flavor
 
 `org.imagilux.umf.flavor` accepts `systemd-boot` (classic) and `uki`. `grub` is **reserved**: `umf compile` rejects it (*`grub` is reserved*). An absent flavor defaults to `systemd-boot` with a warning; an unrecognised value is an error. Classic-flavor projection reads the bootloader `.efi` from inside the image rootfs (no host fallback), so a classic image shipping no bootloader is an error: switch to `flavor=uki` or install systemd-boot into the userland.
