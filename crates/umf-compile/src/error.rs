@@ -100,9 +100,17 @@ pub enum CompileError {
 
     /// A classic bootloader is required but no binary could be found (not in the
     /// image, not on the host, no override).
+    // The remedies must be ones that exist. This previously offered a host
+    // install and a `--bootloader-path` flag: `resolve_bootloader` documents
+    // that there is no host fallback (the disk has to be reproducible from the
+    // image alone) and that the override argument is a library test seam with
+    // no CLI flag behind it. An operator following that text did two useless
+    // things and then went looking for a flag `--help` does not list.
     #[error(
-        "flavor `{kind}` needs a bootloader binary; none found ({tried}) — ship one in the \
-         image, install systemd-boot on the host, or pass --bootloader-path"
+        "flavor `{kind}` needs a bootloader binary; none found ({tried}) — install \
+         systemd-boot into the image rootfs so it ships at \
+         `/usr/lib/systemd/boot/efi/<arch>.efi`, or build with `LABEL \
+         org.imagilux.umf.flavor=uki`, which needs no separate bootloader"
     )]
     BootloaderUnavailable {
         /// The bootloader kind from the manifest.

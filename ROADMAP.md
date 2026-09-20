@@ -454,6 +454,28 @@ defect: rejecting early tells an author their directive does nothing, while the
 spec's "inert" promises it is merely ignored. Whichever wins, the other text
 has to change.
 
+**Confirmed and fixed — `BootloaderUnavailable` advertised two remedies that do
+not exist.** It read *"ship one in the image, install systemd-boot on the host,
+or pass `--bootloader-path`"*. `resolve_bootloader`'s own doc comment says there
+is **no host fallback** (the disk must be reproducible from the image alone) and
+that the override argument is *"a library test seam; there is no CLI flag for
+it"*. So an operator hitting this error did two things that could not help, then
+searched `--help` for a flag that was never there. Now names the two real ways
+out. Same class as the `umf build -t` fix in P3.1: user-facing text describing a
+CLI that does not exist.
+
+**Confirmed and fixed — `ukify` was an undocumented hard host dependency.**
+`flavor=uki` shells out to `ukify` with no in-process fallback, and it appeared
+**zero** times in `prerequisites.md`, the page an operator reads before
+building. Now listed, with its `systemd-boot-efi` companion.
+
+**Confirmed and fixed — cross-arch UKI rejection was undocumented.**
+`umf compile` refuses a UKI for a non-host architecture, because `ukify` takes
+systemd's EFI stub from the host and a foreign-arch UKI would be unbootable.
+`known-limitations.md` covered cross-arch *`RUN`* but not this. Now documented,
+quoting the real error text — my first draft paraphrased it and got the wording
+wrong, which is the same defect class the entry is about.
+
 ---
 
 ## P3 — documentation truth
