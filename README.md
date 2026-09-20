@@ -67,7 +67,7 @@ A Cargo workspace (edition 2024, stable toolchain pinned in `rust-toolchain.toml
 - `crates/umf-oci` — OCI primitives: manifest / config / layer emission, registry client, on-disk layout cache, archive import/export.
 - `crates/umf-engine` — in-process container build + run (youki `libcontainer` + overlayfs), incl. NAT'd egress for RUN steps. No `docker build`, no host container daemon.
 - `crates/umf-vmm` — VMM control layer: a `VmRuntime` trait with QEMU (QMP) and Cloud Hypervisor (REST) backends.
-- `crates/umf-networking` — per-container NAT'd network egress for RUN net namespaces (veth over netlink + `nft` masquerade).
+- `crates/umf-networking` — RUN-step and VM network egress, in three surfaces: rootful NAT egress for `RUN` net namespaces (veth via `rtnetlink` + host `nft` masquerade), rootless userspace egress (in-process smoltcp gateway or `pasta`) with a connect-time SSRF policy, and VM port-forwarding (netns + tap + `nft` DNAT).
 - `crates/umf-builder` — AST → OCI images: L0 introspection, FROM resolution, container lowering, bootable-image assembly.
 - `crates/umf-compile` — projects a bootable OCI image into a GPT/ESP/UKI/squashfs disk (all userspace).
 

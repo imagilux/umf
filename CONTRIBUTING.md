@@ -56,6 +56,21 @@ refactors with no user-visible effect can skip the note; user-facing changes,
 fixes, and especially security or upgrade-impacting changes should always carry
 one.
 
+## Git hooks: keep secrets out of history
+
+The repo tracks a `pre-commit` hook under [`.githooks/`](.githooks/README.md)
+that scans your **staged** changes and blocks the commit if it finds a personal
+webmail address, a private key, a GitHub/AWS/Slack token, a JWT or similar.
+Git never runs hooks from a checkout automatically, so it is opt-in per clone —
+one command, and worth running before your first commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Nothing enforces this server-side, which is exactly why it is worth enabling
+locally: a secret that reaches history has to be rotated, not just reverted.
+
 ## Rust: the quality gate
 
 The implementation is a Cargo workspace (edition 2024, stable toolchain pinned
@@ -113,8 +128,10 @@ dependency graph is a strict tree, no cycles:
   `umf-core`.
 - `umf-oci`: OCI primitives (manifest/config/layer emission, registry client,
   layout cache, layer materialization, archive import/export).
-- `umf-networking`: NAT'd egress for container `RUN` steps (veth via
-  `rtnetlink` + host `nft` masquerade).
+- `umf-networking`: `RUN`-step and VM egress, in three surfaces: rootful NAT
+  (veth via `rtnetlink` + host `nft` masquerade), rootless userspace egress
+  (in-process smoltcp gateway, or `pasta`) behind a connect-time SSRF policy,
+  and VM port-forwarding (per-VM netns + tap + `nft` DNAT).
 - `umf-engine`: in-process container build + run (youki `libcontainer` +
   overlayfs), with the per-`RUN` sandbox and egress wiring.
 - `umf-vmm`: VMM control layer, a `VmRuntime` trait with QEMU (QMP) and Cloud
