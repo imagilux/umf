@@ -476,6 +476,21 @@ systemd's EFI stub from the host and a foreign-arch UKI would be unbootable.
 quoting the real error text — my first draft paraphrased it and got the wording
 wrong, which is the same defect class the entry is about.
 
+**Confirmed — `--secret` rejected on bootable builds, against an explicit spec
+promise.** The spec says the secret is mounted *"inside the `RUN` step's
+container **or VM**"*, and its worked example is `sbsign` — Secure Boot
+signing, a bootable-only workflow. The micro-VM `RUN` backend has no secret
+mount, so the promised VM half is unimplemented.
+
+The implementation gap is left open: wiring a tmpfs secret into the micro-VM
+backend cannot be verified in an environment without KVM, and this session has
+already shown what shipping an unverified boot-path change costs. What *is*
+fixed is the error text, which said `--secret` was "only meaningful for
+container builds" — telling authors their intent was wrong about a capability
+the spec had promised them. It now names the path as unimplemented and points
+at `known-limitations.md`, where the gap and its container-build-then-`ADD`
+workaround are now recorded.
+
 ---
 
 ## P3 — documentation truth

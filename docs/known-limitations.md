@@ -80,6 +80,22 @@ There is deliberately **no fallback**. A root the operator asked to be `ext4` mu
 - **Impact.** `umf compile` with no `--fs` still needs nothing installed — the default `squashfs` keeps the projector pure-Rust and usable on a bare air-gapped node. Only the opt-in paths carry the dependency.
 - **Both tools run unprivileged** and preserve ownership, modes and device nodes, so this adds no privilege requirement.
 
+### `--secret` on bootable builds
+
+`umf build --secret` is rejected when the build is bootable (`FROM` a kernel
+artifact): *--secret is not yet supported for bootable builds*. Container
+builds are unaffected.
+
+- **Spec vs. impl.** The [Build Secrets](specification.md#build-secrets)
+  section says the secret is mounted "as a tmpfs file inside the `RUN` step's
+  container **or VM**", and its worked example is
+  `sbsign --key /run/secrets/key` — Secure Boot signing, which only makes sense
+  in a bootable build. The container engine mounts secrets; the micro-VM `RUN`
+  backend has no secret plumbing yet, so the promised VM half is unimplemented.
+- **Workaround.** Do the signing in a container build that emits the signed
+  artifact, then lay it into the bootable image with `ADD`. The secret then
+  never reaches a VM `RUN` step.
+
 ### Cross-architecture UKI projection
 
 `umf compile` refuses to build a Unified Kernel Image for an architecture other
