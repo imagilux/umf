@@ -414,23 +414,45 @@ and the finding itself was correct. It is now P0.2. The lesson generalises: a
 refutation needs the same standard of evidence as a finding, and a plausible
 mechanism is not evidence.
 
-### P2.2 — Close the remaining CI coverage gaps · [#31](https://github.com/imagilux/umf/issues/31) [#32](https://github.com/imagilux/umf/issues/32) [#33](https://github.com/imagilux/umf/issues/33) [#34](https://github.com/imagilux/umf/issues/34)
+### Triaged so far
 
-The workflow changes for all four are written and validated but not yet on
-`main`: they need a push from an account with the `workflow` scope. Until they
-land, nothing executes on aarch64, two integration tests still assert nothing in
-any lane, and advisories are still only evaluated when someone happens to push.
+**Confirmed and fixed — symlink containment missing in `umf-builder`.** The
+lead was accurate. `initrd.rs` read `bin/busybox` from the staging rootfs with
+`is_file()` + `fs::read`, both symlink-following, on a tree materialized from
+an untrusted image. Reproduced: a staging tree whose `bin/busybox` is a symlink
+to a file outside the root produces an initramfs **containing that file's
+bytes**, which then ships on the ESP of the projected disk. Fixed with
+`contained_read`, the helper the SBOM scan already used.
 
-That last one is not theoretical. Two advisories have now landed on a green
-`main` between pushes — RUSTSEC-2026-0258 (h2) and RUSTSEC-2026-0285 (rustls) —
-each discovered by an unrelated PR rather than by a lane that was watching.
+Two things the reproduction taught that reasoning alone would not have:
 
-### P2.3 — Test coverage where it is thinnest · [#39](https://github.com/imagilux/umf/issues/39)
+- The module walk (`collect_modules_for`) is **not** vulnerable — `walkdir`
+  does not follow symlinks, so a planted `.ko` is skipped by `is_file()`.
+  Pinned with a guard test that fails under `follow_links(true)`, because that
+  safety is incidental rather than stated.
+- The first version of the leak assertion searched the **gzipped** image, so it
+  could never match. It reported the escape was accepted while silently failing
+  to prove the leak. Decompressing first is what turned it into evidence.
 
-Coverage is inverted with respect to risk. `umf-engine` and `umf-networking` do
-the most privileged, least reversible work and carry the fewest tests per
-thousand lines (14 and 12, against 46 for `umf-parser`). That is also where the
-real bugs have actually been found.
+**Confirmed, needs a decision — `VOLUME` / `STOPSIGNAL` rejected though the
+spec calls them inert.** `bootable/validate.rs` returns `ContainerOnlyDirective`
+for `CMD`, `VOLUME` and `STOPSIGNAL`. The spec disagrees on two of the three:
+
+| directive | spec | implementation |
+| --- | --- | --- |
+| `CMD` | "**rejected** at build start" — but conditioned on *"whose `ENTRYPOINT` is an init system"* (`specification.md:504`) | rejected for **every** bootable build, including an appliance, where `specification.md:502` says `CMD` supplies the binary's default arguments |
+| `VOLUME` | "**Inert** for the bootable target" (`:544`) | rejected |
+| `STOPSIGNAL` | "Advisory metadata … not something baked into a bootable image" (`:560`) | rejected |
+
+So the lead's framing — *"the spec describes them as inert/advisory"* — is
+right for `VOLUME` and `STOPSIGNAL` and wrong for `CMD`, which the spec does
+say is rejected. The residual `CMD` gap is narrower: the implementation
+over-rejects relative to the condition the spec states.
+
+Not fixed here, because the fix direction is a design call rather than a
+defect: rejecting early tells an author their directive does nothing, while the
+spec's "inert" promises it is merely ignored. Whichever wins, the other text
+has to change.
 
 ---
 

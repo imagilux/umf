@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use super::*;
+use std::io::Read as _;
 
 fn seed_busybox_shaped_staging(release: &str) -> BuildStaging {
     let staging = BuildStaging::new().expect("staging");
@@ -583,5 +584,120 @@ fn module_matching_ignores_dash_versus_underscore() {
         picked.len(),
         1,
         "`crc32c_intel` must match the file spelled `crc32c-intel.ko`: {picked:?}",
+    );
+}
+
+/// Lead from the audit backlog (#40): does the builder follow a planted
+/// symlink out of the staging rootfs when it reads busybox?
+///
+/// The staging tree is materialized from an untrusted OCI image. A layer may
+/// ship `bin/busybox` as a symlink to a host path — that placement passes
+/// tar's traversal guard, because the *entry name* is contained; only the
+/// target escapes. `umf-oci` (`contained_read`) and `umf-compile`
+/// (`rootfs_subpath`) both canonicalize before reading for exactly this
+/// reason. This asserts `umf-builder` does too.
+#[test]
+fn a_symlinked_busybox_escaping_the_staging_root_is_refused() {
+    let release = "9.9.9-test";
+    let staging = seed_busybox_shaped_staging(release);
+    let root = staging.path().to_path_buf();
+
+    // A file outside the staging root, standing in for anything on the build
+    // host the image author would like to read back out of the artifact.
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("host-secret");
+    std::fs::write(&secret, b"HOST-ONLY-DO-NOT-EMBED").unwrap();
+
+    std::fs::remove_file(root.join("bin/busybox")).unwrap();
+    std::os::unix::fs::symlink(&secret, root.join("bin/busybox")).unwrap();
+
+    let kernel = synthetic_kernel_layout(&root, release);
+    let result = generate_initramfs_with_flavor(&staging, &kernel, InitramfsFlavor::Boot);
+
+    match result {
+        Err(InitrdError::MissingBusybox(_)) => {} // treated as absent — correct
+        Err(other) => panic!("expected MissingBusybox, got {other:?}"),
+        Ok((image, _)) => {
+            // The initramfs is gzipped, so the payload has to be decompressed
+            // before looking for it — searching the compressed bytes would
+            // never match and would quietly turn this into a no-op assertion.
+            let mut cpio = Vec::new();
+            flate2::read::GzDecoder::new(image.as_slice())
+                .read_to_end(&mut cpio)
+                .expect("initramfs must be valid gzip");
+            let needle = b"HOST-ONLY-DO-NOT-EMBED";
+            let leaked = cpio.windows(needle.len()).any(|w| w == needle);
+            assert!(
+                !leaked,
+                "a host file outside the staging root was read through a planted \
+                 symlink and embedded in the initramfs",
+            );
+            panic!("escaping symlink was accepted as busybox (no leak, but unsafe)");
+        }
+    }
+}
+
+/// Same question for the module tree: `collect_modules_for` walks it and
+/// `fs::read`s each hit, so a layer planting `…/squashfs.ko -> /etc/shadow`
+/// would embed a host file just as a symlinked busybox does.
+#[test]
+fn a_symlinked_kernel_module_escaping_the_staging_root_is_not_embedded() {
+    let release = "9.9.9-test";
+    let staging = seed_busybox_shaped_staging(release);
+    let root = staging.path().to_path_buf();
+
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("host-secret");
+    std::fs::write(&secret, b"MODULE-LEAK-CANARY").unwrap();
+
+    let planted = root
+        .join("lib/modules")
+        .join(release)
+        .join("kernel/fs/squashfs/squashfs.ko");
+    std::fs::remove_file(&planted).unwrap();
+    std::os::unix::fs::symlink(&secret, &planted).unwrap();
+
+    let kernel = synthetic_kernel_layout(&root, release);
+    let (image, _) = generate_initramfs_with_flavor(&staging, &kernel, InitramfsFlavor::Boot)
+        .expect("initramfs");
+
+    let mut cpio = Vec::new();
+    flate2::read::GzDecoder::new(image.as_slice())
+        .read_to_end(&mut cpio)
+        .expect("valid gzip");
+    let needle = b"MODULE-LEAK-CANARY";
+    assert!(
+        !cpio.windows(needle.len()).any(|w| w == needle),
+        "a host file was read through a symlinked kernel module and embedded",
+    );
+}
+
+/// The containment must not break the common real layout: distros ship
+/// `/bin/busybox` as a symlink to `/usr/bin/busybox` within the same rootfs.
+/// That target never leaves the root, so it is legitimate — a fix that
+/// rejected every symlink would refuse ordinary images.
+#[test]
+fn an_internal_symlink_to_busybox_is_still_accepted() {
+    let release = "9.9.9-test";
+    let staging = seed_busybox_shaped_staging(release);
+    let root = staging.path().to_path_buf();
+
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/bin/busybox"), b"#real-busybox-ELF").unwrap();
+    std::fs::remove_file(root.join("bin/busybox")).unwrap();
+    std::os::unix::fs::symlink("../usr/bin/busybox", root.join("bin/busybox")).unwrap();
+
+    let kernel = synthetic_kernel_layout(&root, release);
+    let (image, _) = generate_initramfs_with_flavor(&staging, &kernel, InitramfsFlavor::Boot)
+        .expect("an in-rootfs symlink to busybox must be accepted");
+
+    let mut cpio = Vec::new();
+    flate2::read::GzDecoder::new(image.as_slice())
+        .read_to_end(&mut cpio)
+        .expect("valid gzip");
+    let needle = b"#real-busybox-ELF";
+    assert!(
+        cpio.windows(needle.len()).any(|w| w == needle),
+        "the symlink target's contents must be what lands in the initramfs",
     );
 }
