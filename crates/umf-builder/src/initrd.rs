@@ -122,10 +122,18 @@ pub fn generate_initramfs_with_flavor(
         "initrd: generating initramfs",
     );
 
+    // The staging tree is materialized from an untrusted image, so `bin/busybox`
+    // may be a symlink whose *target* leaves the rootfs — a placement tar's
+    // traversal guard accepts, because only the entry name is checked. Reading
+    // it naively would embed a build-host file into the initramfs, which then
+    // ships on the ESP of the projected disk. `contained_read` canonicalizes
+    // and confirms the result stays under the root, so an escaping symlink
+    // reads as absent; `umf-oci`'s SBOM scan and `umf-compile`'s boot-file
+    // reads already use it, and this is the same rootfs.
     let busybox_src = staging.path().join("bin").join("busybox");
-    if !busybox_src.is_file() {
-        return Err(InitrdError::MissingBusybox(busybox_src));
-    }
+    let busybox_src = umf_oci::materialize::contained_read(staging.path(), &busybox_src)
+        .filter(|p| p.is_file())
+        .ok_or(InitrdError::MissingBusybox(busybox_src))?;
     let busybox_bytes = std::fs::read(&busybox_src)?;
     let busybox_perms = std::fs::metadata(&busybox_src)?.permissions().mode();
 

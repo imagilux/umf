@@ -1,0 +1,22 @@
+---
+security:
+  - |
+    The initramfs generator followed a symlink out of the staging rootfs when
+    reading ``/bin/busybox``. The staging tree is materialized from an
+    untrusted OCI image, and a layer may ship ``bin/busybox`` as a symlink
+    whose *target* leaves the rootfs — a placement tar's traversal guard
+    accepts, since only the entry name is checked. The builder read the target
+    and embedded it in the initramfs, which then ships on the ESP of the
+    projected disk, so any build-host file readable by the building user could
+    be carried out inside a normal-looking artifact.
+
+    The read now goes through ``umf_oci::materialize::contained_read``, which
+    canonicalizes and requires the result to stay under the rootfs, so an
+    escaping symlink reads as absent (``staging rootfs is missing
+    /bin/busybox``). The same helper already guarded the SBOM scan, and
+    ``umf-compile`` applies the equivalent check to in-image boot files; the
+    sweep had not reached ``umf-builder``.
+
+    An *internal* symlink is unaffected: ``/bin/busybox ->
+    /usr/bin/busybox`` within the same rootfs is the common distro layout and
+    still resolves.
