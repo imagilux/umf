@@ -539,6 +539,31 @@ the floor". That phrase appears nowhere in `umf-parser`; lines 14-20 are about
 exec-vs-shell array form, and `RunMount` is parsed throughout. Either it was
 already fixed or the reference was wrong. Recorded so it is not re-raised.
 
+**Confirmed — a bootable build emits one squashed layer.** `bootable/mod.rs`
+builds a single `LayerSource` from the whole staging tree and passes `&[layer]`
+to `emit_image`, while the spec's L4+ rule promises one content-addressed layer
+per diff-producing directive, reused on input-hash match. The container path
+does assemble a chain (`assemble_layer_chain`), so this is bootable-only.
+Documented rather than implemented: per-directive layering for the micro-VM
+`RUN` path is architectural work, and it cannot be exercised here without KVM.
+
+**Confirmed — `umf doctor` sample output was obsolete.** `quickstart.md`
+carried a flat `name: value` listing under a *"Detected runtimes on this host"*
+heading. The real report is two aligned tables (**Container build & RUN**,
+**VM / bootable**) with name / purpose / path / version / status columns —
+nothing about the documented shape survives. `cli.md` named a
+*"Container RUN-step network egress"* section that no longer exists, and
+`prerequisites.md` / `troubleshooting.md` quoted values in the old
+`key: value` rendering. All corrected against real output.
+
+**Confirmed but unfixable from this session — the subprocess-guardrail comment.**
+`rust.yml:56-58` describes *"the temporary allowlist (round-trip tests scheduled
+for removal)"*. `scripts/check-subprocess-calls.sh` has no round-trip-test
+allowlist and nothing marked temporary; its allowlist is the per-backend spawn
+helpers (`backends/qemu/spawn.rs`, `backends/cloud_hypervisor/spawn.rs`), which
+are permanent by design. The fix is one comment in a workflow file, which this
+session's OAuth token cannot push — it belongs with the other blocked CI work.
+
 ---
 
 ## P3 — documentation truth

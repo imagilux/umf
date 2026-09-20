@@ -307,7 +307,7 @@ umf ps --prune -f status=exited
 
 `umf doctor [PATH]`
 
-Report which host runtimes UMF needs and what's installed. With a recipe, scope the report to that build. The container engine is always available (linked in), so `doctor` surfaces VM-target prerequisites (`qemu-system-<arch>`, `/dev/kvm`) plus a **Container RUN-step network egress** section: whether `nft` is on `PATH`, whether `dnsmasq` is present (the default in-VM DHCP for `--vmm=ch` port-forwarding; not needed if you pass `--dhcp-command`), the `net.ipv4.ip_forward` state, and the netfilter `FORWARD` policy (UMF enables `ip_forward` itself but can't override a default-drop `FORWARD` policy). Run `sudo umf doctor` to let it read the ruleset for the FORWARD verdict.
+Report which host runtimes UMF needs and what's installed. With a recipe, scope the report to that build. Output is two aligned tables — **Container build & RUN** and **VM / bootable** — each row carrying a name, what it is for, the resolved path, a version and an `ok` / `warn` status. The container engine is always available (linked in), so `doctor`'s value is the rest: whether `nft` is on `PATH`, whether `dnsmasq` is present (the default in-VM DHCP for `--vmm=ch` port-forwarding; not needed if you pass `--dhcp-command`), the `net.ipv4.ip_forward` state, and the netfilter `FORWARD` policy (UMF enables `ip_forward` itself but can't override a default-drop `FORWARD` policy). Run `sudo umf doctor` to let it read the ruleset for the FORWARD verdict.
 
 | Flag | Purpose |
 |------|---------|

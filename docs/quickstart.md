@@ -74,18 +74,26 @@ umf --version
 
 ```console
 $ umf doctor
-Detected runtimes on this host:
-  qemu-system-x86_64: /usr/bin/qemu-system-x86_64
-  /dev/kvm: accessible
-  container runtime: linked-in (umf-engine + libcontainer) — always available; powers both `umf build` and `umf run` without any external container CLI
-  seccomp: default profile active (deny-by-default, N syscalls allowed) on RUN steps
+Container build & RUN
+  NAME                 PURPOSE                                            PATH                  VERSION       STATUS
+  container runtime    RUN steps (libcontainer, no external CLI)          built-in              0.0.1         ok
+  seccomp              RUN syscall sandbox (deny-by-default)              built-in              428 syscalls  ok
+  nft                  NAT masquerade for RUN-step egress                 /usr/sbin/nft         v1.0.9        ok
+  net.ipv4.ip_forward  route RUN egress out the host                      /proc/sys/...         enabled       ok
+  user namespaces      unprivileged userns for rootless builds            /proc/sys             permitted     ok
+  mkfs.erofs           optional erofs layer-cache acceleration            /usr/bin/mkfs.erofs   1.7.1         ok
+  pasta                optional rootless egress helper                    <none on PATH>                      warn
 
-Container RUN-step network egress (NAT out through the host):
-  nft: /usr/sbin/nft
-  dnsmasq: /usr/sbin/dnsmasq
-  net.ipv4.ip_forward: enabled
-  FORWARD policy: unknown — re-run as root (`sudo umf doctor`) to inspect the nftables ruleset
+VM / bootable
+  NAME                PURPOSE                                             PATH                  VERSION       STATUS
+  qemu-system-x86_64  VM RUN backend + `umf run` (default VMM)            /usr/bin/qemu-sys...  8.2.2         ok
+  cloud-hypervisor    alternative VMM (`umf run --vmm ch`)                <none on PATH>                      warn
+  /dev/kvm            absent — VMs fall back to slow TCG emulation        /dev/kvm                            warn
 ```
+
+*(Abridged — the real report carries more rows and wider `PURPOSE` text. A
+`warn` is not a failure: it marks an optional accelerator or a path you only
+need for some build shapes.)*
 
 Pass a recipe — or a directory holding a `Containerfile`/`Dockerfile` — to scope the check to one build: `umf doctor .`. For the full host checklist and fixes when one of these reads MISSING, see [Prerequisites](prerequisites.md) and [Troubleshooting](troubleshooting.md).
 
