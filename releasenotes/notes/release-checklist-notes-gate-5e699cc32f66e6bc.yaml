@@ -1,0 +1,9 @@
+---
+other:
+  - |
+    ``CONTRIBUTING.md`` gains a pre-tag check for release notes. ``v0.0.1`` was
+    tagged with **zero** notes behind roughly fifteen substantive changes,
+    including a behaviour change, so its generated notes are empty — and a
+    published tag is immutable, so that cannot be repaired. One ``git diff``
+    against the last tag lists what has been added since, and catches the
+    omission before the tag exists rather than after.

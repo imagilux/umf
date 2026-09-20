@@ -56,6 +56,19 @@ refactors with no user-visible effect can skip the note; user-facing changes,
 fixes, and especially security or upgrade-impacting changes should always carry
 one.
 
+**Before tagging a release, check the notes exist.** `v0.0.1` was tagged with
+**zero** notes behind roughly fifteen substantive changes, including a
+behaviour change, so its generated notes are empty and that cannot be fixed
+retroactively — a published tag is immutable. One command prevents the repeat:
+
+```bash
+git diff --name-only "$(git describe --tags --abbrev=0)"..HEAD -- releasenotes/notes/
+```
+
+An empty result on a release with user-visible changes means notes are missing,
+not that nothing happened. `uv run reno report` then shows what the next tag
+would actually publish.
+
 ## Git hooks: keep secrets out of history
 
 The repo tracks a `pre-commit` hook under [`.githooks/`](.githooks/README.md)
