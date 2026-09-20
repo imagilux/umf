@@ -49,7 +49,8 @@ Build a recipe into a **plain, layered OCI image** — container and bootable al
 | Flag | Purpose |
 |------|---------|
 | `-f` / `--file <PATH>` | Recipe of any name, anywhere — bypasses `Containerfile`/`Dockerfile` discovery; the positional then names the context dir. See [Recipe input](#recipe-input). |
-| `--tag <REF>` | Reference the image is registered under. **Required** — container and bootable both emit an OCI image. |
+| `-t` / `--tag <REF>` | Reference the image is registered under. **Required** — container and bootable both emit an OCI image. |
+| `--build-arg <NAME=VALUE>` | Override an `ARG`'s declared default for this build. Repeatable. It overrides a declaration, it does not create one: a name the recipe never `ARG`-declares is ignored rather than injected, and stays unset. Not a route for secrets — a substituted value lands in the layer; use `--secret`, which does not. |
 | `--push` | Push to the registry implied by `--tag` after building. Works for bootable images too — they are ordinary OCI. |
 | `--insecure-registry` | Allow plain-HTTP push (local `registry:2`). |
 | `--username <NAME>` / `--password-stdin` | Registry credentials (else env vars → `~/.docker/config.json`, including `credsStore`/`credHelpers` credential helpers). |
@@ -140,7 +141,7 @@ Bootable / VM:
 | `--disk <PATH>` | Boot a raw disk directly (skips auto-compile). |
 | `--firmware <PATH>` | UEFI firmware (OVMF / EDK II). Auto-discovered on the host for both backends — under `--vmm=ch` a dedicated CloudHv edk2 build (`CLOUDHV.fd`) is probed first, then the OVMF/AAVMF list — so pass it only to override or when discovery fails (*no UEFI firmware for `<arch>` found…*). One asymmetry on a raw `--disk` boot: firmware-less `qemu` falls back to its built-in SeaBIOS (which boots a legacy BIOS/MBR disk), while `ch` cannot boot a disk without a firmware payload, so a failed discovery is an error there. |
 | `--memory <MIB>` / `--cpus <N>` | Guest RAM (default 1024) / vCPUs (default 2). |
-| `-p, --port-forward <HOST:GUEST[/udp]>` | Host port forward. Repeatable. QEMU uses user-mode networking (`hostfwd`); Cloud Hypervisor (`--vmm=ch`) has none, so UMF wires it host-side: a per-VM netns + tap + nft DNAT, pure-Rust (no `iproute2`), with a DHCP daemon in the namespace (`dnsmasq` by default; see `--dhcp-command`). Needs `nft` (and the DHCP daemon) on `PATH` (see `umf doctor`). |
+| `-p, --port-forward <[BIND:]HOST:GUEST[/udp]>` | Host port forward. Repeatable. The optional `BIND:` prefix picks the host address to listen on — `-p 127.0.0.1:8080:80` keeps the forward on loopback instead of every interface, which is the difference between exposing a guest service to your machine and to your network. Omitted, the forward binds all interfaces. QEMU uses user-mode networking (`hostfwd`); Cloud Hypervisor (`--vmm=ch`) has none, so UMF wires it host-side: a per-VM netns + tap + nft DNAT, pure-Rust (no `iproute2`), with a DHCP daemon in the namespace (`dnsmasq` by default; see `--dhcp-command`). Needs `nft` (and the DHCP daemon) on `PATH` (see `umf doctor`). |
 | `--dhcp-command <ARGV>` | DHCP daemon run inside the VM netns for `--vmm=ch` port-forwarding. Default `dnsmasq`; `none` launches nothing (run your own DHCP there, or use a static guest IP); any other value is a whitespace-split command, e.g. `--dhcp-command "kea-dhcp4 -c /etc/kea.conf"`. The daemon starts with the bridge up at `10.70.x.1/29` and owns its own config. |
 | `--graphic` | Graphical window instead of the default headless serial console. |
 
@@ -287,7 +288,11 @@ umf ps --prune -f status=exited
 
 `umf doctor [PATH]`
 
-Report which host runtimes UMF needs and what's installed. With a recipe, scope the report to that build. The container engine is always available (linked in), so `doctor` surfaces VM-target prerequisites (`qemu-system-<arch>`, `/dev/kvm`) plus a **Container RUN-step network egress** section: whether `nft` is on `PATH`, whether `dnsmasq` is present (the default in-VM DHCP for `--vmm=ch` port-forwarding; not needed if you pass `--dhcp-command`), the `net.ipv4.ip_forward` state, and the netfilter `FORWARD` policy (UMF enables `ip_forward` itself but can't override a default-drop `FORWARD` policy). Run `sudo umf doctor` to let it read the ruleset for the FORWARD verdict. The section also reports the **rootless egress backend** selected by `--rootless-net` / `UMF_ROOTLESS_NET` (`native` by default), and whether `pasta` is available on `PATH` (relevant only when the `pasta` backend is selected).
+Report which host runtimes UMF needs and what's installed. With a recipe, scope the report to that build. The container engine is always available (linked in), so `doctor` surfaces VM-target prerequisites (`qemu-system-<arch>`, `/dev/kvm`) plus a **Container RUN-step network egress** section: whether `nft` is on `PATH`, whether `dnsmasq` is present (the default in-VM DHCP for `--vmm=ch` port-forwarding; not needed if you pass `--dhcp-command`), the `net.ipv4.ip_forward` state, and the netfilter `FORWARD` policy (UMF enables `ip_forward` itself but can't override a default-drop `FORWARD` policy). Run `sudo umf doctor` to let it read the ruleset for the FORWARD verdict.
+
+| Flag | Purpose |
+|------|---------|
+| `--format <table\|json>` | `table` (default) is the sectioned human report; `json` emits the same findings structured, for a CI step that gates on a specific prerequisite rather than on the exit code. | The section also reports the **rootless egress backend** selected by `--rootless-net` / `UMF_ROOTLESS_NET` (`native` by default), and whether `pasta` is available on `PATH` (relevant only when the `pasta` backend is selected).
 
 ## Developer tooling
 

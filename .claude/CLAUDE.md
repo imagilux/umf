@@ -144,7 +144,6 @@ umf/
 ├── ROADMAP.md                   # prioritised maintainer work queue (P0..P3) — companion to docs/known-limitations.md
 ├── releasenotes/                # reno release notes (notes/*.yaml, aggregated by tag)
 ├── scripts/                     # installer + maintenance scripts (install.sh, make-boot-fixture.sh, regen-ch-client.sh, …)
-├── bench/                       # benchmark fixtures / recipes for `umf bench`
 ├── tests/                       # CLI integration tests
 ├── Cargo.toml                   # workspace manifest + root binary package
 ├── Cargo.lock                   # committed (this repo ships a binary)
@@ -165,7 +164,6 @@ umf/
 │       ├── oci-conformance.yml  # CI — OCI image-spec conformance gate (JSON schema + skopeo/crane)
 │       ├── privileged.yml       # CI — privileged lane: rootful libcontainer RUN, NAT egress, VmNet plumbing, build→run acceptance
 │       ├── rootless.yml         # CI — rootless lane: userns build + delegated cgroups
-│       ├── audit.yml            # CI — weekly `cargo deny check advisories` (scheduled + dispatch)
 │       ├── release-validate.yml # CI — PR/main cross-build of the release targets (musl via Cross.toml)
 │       ├── release.yml          # binary GitHub Release on `vX.Y.Z` tags
 │       └── deploy-docs.yml      # MkDocs publish on `spec-vX.Y[.Z]` tags

@@ -128,7 +128,11 @@ enum Command {
         /// Reference under which the built image is registered (e.g.
         /// `registry.example.com/repo:tag`). Required for every build —
         /// container and bootable both emit a plain layered OCI image.
-        #[arg(long)]
+        ///
+        /// `-t` is the Docker spelling, which this DSL adopts wherever it
+        /// carries over; the short was previously undefined, so documented
+        /// `umf build -t ...` invocations failed with a clap error.
+        #[arg(short = 't', long)]
         tag: Option<String>,
         /// Container target: target platform in `os/arch` form (e.g.
         /// `linux/amd64`). Cross-arch container builds are tracked as a
@@ -416,7 +420,7 @@ enum Command {
         #[arg(long)]
         password_stdin: bool,
     },
-    /// Attach (and, later, generate) SBOMs as OCI 1.1 referrer artifacts of an image.
+    /// Generate or attach SBOMs as OCI 1.1 referrer artifacts of an image.
     ///
     /// The `subject` is the target manifest; referrers are cosign-/oras-
     /// compatible. List them back with a referrers-aware client (`oras

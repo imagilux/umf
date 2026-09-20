@@ -1,0 +1,38 @@
+---
+features:
+  - |
+    ``umf build`` accepts ``-t`` as the short form of ``--tag``. This is the
+    Docker spelling the DSL already adopts elsewhere, and the short was
+    previously undefined — so ``umf build -t ref .``, as printed in
+    ``docs/examples.md``, failed with ``unexpected argument '-t' found``. The
+    long form is unchanged.
+fixes:
+  - |
+    ``docs/known-limitations.md`` no longer lists ``ip`` among the runtime
+    requirements for ``--vmm=ch`` port-forwarding. ``rtnetlink`` replaced the
+    ``iproute2`` shell-outs, so only ``nft`` is needed; readers were being told
+    to install a package UMF does not use, or to conclude the tool was broken
+    without it.
+  - |
+    ``docs/cli.md`` documents ``umf build --build-arg``, ``umf doctor
+    --format``, and the ``-p [BIND:]HOST:GUEST`` bind-address form. All three
+    are implemented, and the page states it covers every subcommand and flag.
+    The bind-address form in particular is the difference between exposing a
+    guest service to the local machine and to the whole network.
+  - |
+    ``umf sbom --help`` described generation as future work (*"Attach (and,
+    later, generate)"*) although ``umf sbom generate`` is implemented and
+    wired.
+  - |
+    ``docs/examples.md`` and ``docs/examples/README.md`` both rendered to
+    ``examples/index.html`` on the published site, so one silently replaced the
+    other. The worked-examples page now has its own slug and nav entry.
+  - |
+    ``mkdocs.yml`` declares ``site_url`` (plus ``repo_url`` / ``edit_uri``).
+    Without it the generated ``sitemap.xml`` carried no absolute URLs, which
+    hurts indexing for the published specification.
+other:
+  - |
+    ``.claude/CLAUDE.md``'s repository layout no longer lists ``audit.yml``,
+    which does not exist in the tree, or ``bench/``, which is in
+    ``.gitignore`` and so is absent from every clone.

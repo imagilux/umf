@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use predicates::str::contains;
 
 fn umf() -> Command {
@@ -1954,4 +1955,54 @@ fn extending_a_bootable_image_stays_bootable_and_inherits_the_manifest() {
         rendered.contains("org.example.layer"),
         "the extending recipe's labels must be kept:\n{rendered}"
     );
+}
+
+/// `umf build -t` must parse. The docs used the Docker spelling before it was
+/// defined, so every copy-pasted `umf build -t ref .` in `examples.md` died on
+/// `unexpected argument '-t' found` — a doc that cannot be followed.
+///
+/// Asserted by running a build that fails *later*, on the recipe path: reaching
+/// that error proves `-t` was consumed as the tag rather than rejected by the
+/// parser. A `--help` substring check would not, since `-t` appears in help
+/// text either way.
+#[test]
+fn build_accepts_the_docker_short_tag_flag() {
+    umf()
+        .args([
+            "build",
+            "-t",
+            "local/short-flag:1",
+            "/nonexistent-recipe.umf",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("path does not exist"))
+        .stderr(predicates::str::contains("unexpected argument").not());
+}
+
+/// The long spelling keeps working — `-t` is an addition, not a rename.
+#[test]
+fn build_still_accepts_the_long_tag_flag() {
+    umf()
+        .args([
+            "build",
+            "--tag",
+            "local/long-flag:1",
+            "/nonexistent-recipe.umf",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("path does not exist"));
+}
+
+/// `umf sbom generate` is implemented and wired, so the summary line must not
+/// still describe generation as future work.
+#[test]
+fn sbom_help_does_not_call_generate_future_work() {
+    umf()
+        .args(["sbom", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("generate"))
+        .stdout(predicates::str::contains("later, generate").not());
 }
