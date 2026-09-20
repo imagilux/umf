@@ -1,6 +1,11 @@
 site_name: UMF — Universal Machine Format
 site_description: A Dockerfile-inspired DSL for building universal bootable artifacts (bare-metal & VM disk images, classic-boot or UKI, and OCI containers)
 site_author: Gaël THEROND / Imagilux
+# Required for an absolute-URL sitemap.xml; without it every <loc> is
+# relative and the published spec indexes poorly.
+site_url: https://umf.imagilux.org/
+repo_url: https://github.com/imagilux/umf
+edit_uri: edit/main/docs/
 
 docs_dir: docs
 
@@ -11,6 +16,7 @@ nav:
   - Compatibility: compatibility.md
   - Specification: specification.md
   - Examples: examples.md
+  - Worked examples: examples/supply-chain.md
   - CLI Reference: cli.md
   - Architecture: architecture.md
   - Troubleshooting: troubleshooting.md

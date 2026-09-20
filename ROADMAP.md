@@ -436,18 +436,40 @@ real bugs have actually been found.
 
 ## P3 — documentation truth
 
-### P3.1 — Docs drift · [#36](https://github.com/imagilux/umf/issues/36)
+### P3.1 — Docs drift · ~~open~~ fixed · [#36](https://github.com/imagilux/umf/issues/36)
 
-Six verified inaccuracies are already tracked. Two more found since:
+Eight claims, each re-verified against the current tree rather than taken from
+the issue — which was written at `8b39f60`, and two of its items had moved.
 
-- `.claude/CLAUDE.md` describes `umf-networking` as reaching the CLI
-  transitively through `umf-engine`, and omits it from `umf-builder` entirely.
-  Both depend on it **directly** (`crates/umf-builder/src/engine_build/fetch.rs:45`).
-- `umf sbom --help` still reads *"Attach (and, later, generate)"*, though
-  `umf sbom generate` is implemented and wired.
+**Fixed:** the `ip` runtime requirement (`rtnetlink` replaced the `iproute2`
+shell-outs, so `umf doctor` needs `nft` only); `--build-arg`, `doctor --format`
+and the `-p [BIND:]HOST:GUEST` form, all absent from a `cli.md` that claims to
+document every flag; `umf build -t`, used in `examples.md` but undefined, so
+the documented invocation died on `unexpected argument '-t' found`;
+`docs/examples.md` and `docs/examples/README.md` both rendering to
+`examples/index.html`, one silently winning; a missing `site_url`, which left
+`sitemap.xml` with no absolute URLs; and `umf sbom --help` still calling
+`generate` future work after it shipped.
 
-Both are small, but architecture docs that misstate the dependency graph are
-the kind of thing a new contributor trusts.
+**Two items had changed since the issue was filed**, which is the argument for
+re-verifying rather than working from the list:
+
+- The workflow drift **inverted**. `rootless.yml` and `release-validate.yml`
+  are now documented — but `audit.yml` is documented and does not exist. It was
+  added on `6b4e673`, a branch that never merged: the CI-hardening work blocked
+  on the `workflow` OAuth scope. The docs describe CI that the push wall kept
+  out of the tree.
+- *"`.claude/CLAUDE.md` describes `umf-networking` as reaching the CLI
+  transitively"* was **already fixed**; both the `umf-builder` and `umf` bullets
+  now say "directly". Left alone.
+
+**One sub-claim was wrong.** The issue reports `umf build -t` in `README.md`;
+the `-t` there is on `docker build -t umf:latest .`, which is Docker's own flag
+and correct. Only `examples.md` was broken.
+
+`bench/` is removed from the layout tree rather than created: it is in
+`.gitignore`, so documenting it as repo structure describes something no clone
+ever has.
 
 ---
 
