@@ -15,10 +15,12 @@ umf-core            shared types, errors, AST, org.imagilux.umf.* label constant
  │                  OCI bundle prep, overlayfs lower/upper capture, RUN-step egress
  ├─ umf-vmm         VMM control layer: VmRuntime trait + QEMU (QMP) & Cloud Hypervisor
  │                  (REST) backends — pure control surface, no internal umf deps
- ├─ umf-networking  per-container NAT'd egress for RUN net namespaces (veth over
- │                  rtnetlink + nft masquerade), plus host-side cloud-hypervisor
- │                  VM port-forwarding (netns + tap + nft DNAT + pluggable DHCP);
- │                  no internal umf deps; used by umf-engine (egress) + umf run (VM net)
+ ├─ umf-networking  RUN-step + VM egress in three surfaces: rootful NAT (veth over
+ │                  rtnetlink + nft masquerade); rootless userspace egress (in-proc
+ │                  smoltcp gateway or pasta) behind a connect-time SSRF policy; and
+ │                  host-side cloud-hypervisor VM port-forwarding (netns + tap + nft
+ │                  DNAT + pluggable DHCP); no internal umf deps; used by umf-engine
+ │                  (egress) + umf run (VM net)
  ├─ umf-compile     disk projector: a type=bootable OCI image → a GPT/ESP/UKI/rootfs
  │                  disk, all userspace (gpt/fatfs/backhand), driven by the boot
  │                  manifest (depends on core + oci; no parser, no engine)
@@ -61,7 +63,7 @@ Each filesystem-modifying directive becomes one content-addressed layer; re-buil
 - **Bundle prep** turns a pulled OCI image into a runnable bundle (rootfs directory + `config.json`), bind-mounting the host's DNS config (read-only, never captured) so name resolution works inside the step.
 - **overlayfs** stacks the image layers as lowers and captures a RUN step's writes in an upper-dir, which `umf-builder` packs into the next layer.
 - **`LibcontainerRuntime`** executes the step — rootless by default, with uid/gid mapping derived from the caller. A `NoopRuntime` backs dry-runs and tests.
-- **Network egress** — each RUN step runs in its own network namespace (never the host's). `umf-networking` wires it out through the host between container create and start: a veth pair (a per-container `/30`) plus an `nft` masquerade rule, so `apt` / `git` / `curl` resolve and reach the network. It's best-effort and torn down with the step; a build whose RUN steps don't touch the network is unaffected. `umf doctor` reports the host's `ip_forward` and FORWARD-policy state, which UMF can't override.
+- **Network egress** — each RUN step runs in its own network namespace (never the host's). `umf-networking` wires it out between container create and start, by one of two routes. **Rootful**: a veth pair (a per-container `/30`) plus an `nft` masquerade rule. **Rootless**: an in-process smoltcp gateway (`native`, the default) or the external `pasta` helper, both behind a connect-time SSRF policy that denies host-internal destinations (loopback, link-local including cloud metadata, RFC1918, ULA, CGNAT) unless `--rootless-net-allow` opts back in. Either way `apt` / `git` / `curl` resolve and reach the network. It's best-effort and torn down with the step; a build whose RUN steps don't touch the network is unaffected. `umf doctor` reports the host's `ip_forward` and FORWARD-policy state, which UMF can't override.
 
 `umf run` reuses the same engine: it translates an image's ENTRYPOINT + CMD (plus CLI overrides) into a run spec and drives libcontainer end-to-end.
 

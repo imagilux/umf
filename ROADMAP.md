@@ -516,6 +516,29 @@ shell variables inside the *generated* init script (`UMF_MODS`, `UMF_IP`, …)
 and the CI gates (`UMF_REQUIRE_PRIVILEGED`, `UMF_REQUIRE_MKFS`), none of which
 belong in operator documentation.
 
+**Confirmed — `umf-networking` described as rootful-NAT-only in three places.**
+`README.md`, `CONTRIBUTING.md` and `architecture.md` all documented one surface
+where there are three. The omission that matters is the **connect-time SSRF
+policy**: a security control denying host-internal destinations by default,
+which a reader of those pages would not have known existed.
+
+**Confirmed — the `.githooks/` secret-scanning hook was undiscoverable.** A
+tracked `pre-commit` hook blocks a commit carrying a webmail address, private
+key, cloud token or JWT. Git does not run hooks from a checkout, so it needs
+`git config core.hooksPath .githooks` per clone, and `CONTRIBUTING.md` never
+mentioned it. A secret that reaches history has to be rotated, not reverted,
+so the cost of not knowing is asymmetric.
+
+**Confirmed — the `compatibility.md` legend described markers the table no
+longer uses** (`✓`, italics). The only `✓` left in the file was in the legend
+explaining it.
+
+**Refuted — the stale `grammar.rs` comment.** The lead says
+`umf-parser/src/grammar.rs:16-18` claims `RUN --mount` options are "dropped on
+the floor". That phrase appears nowhere in `umf-parser`; lines 14-20 are about
+exec-vs-shell array form, and `RunMount` is parsed throughout. Either it was
+already fixed or the reference was wrong. Recorded so it is not re-raised.
+
 ---
 
 ## P3 — documentation truth

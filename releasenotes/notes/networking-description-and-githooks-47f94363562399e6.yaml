@@ -1,0 +1,17 @@
+---
+other:
+  - |
+    ``README.md``, ``CONTRIBUTING.md`` and ``docs/architecture.md`` described
+    ``umf-networking`` as rootful NAT egress only. It has three surfaces:
+    rootful NAT, rootless userspace egress (an in-process smoltcp gateway or
+    ``pasta``) behind a connect-time SSRF policy, and VM port-forwarding. The
+    SSRF policy in particular is a security control that a reader of those
+    pages would not have known existed.
+  - |
+    ``CONTRIBUTING.md`` documents the repo's ``pre-commit`` secret-scanning
+    hook. Git does not run hooks from a checkout automatically, so it needs
+    ``git config core.hooksPath .githooks`` per clone — which nothing told a
+    new contributor.
+  - |
+    The ``compatibility.md`` legend described ``✓`` and italic markers that its
+    table no longer uses.

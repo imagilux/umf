@@ -11,7 +11,7 @@ UMF produces a **container** image or a **bootable** image from a single DSL —
 | `LABEL org.imagilux.umf.flavor` | -                    | `systemd-boot` \| `uki`         |
 | `ENTRYPOINT`                 | `<path>` \| `none`      | init \| `<path>`                |
 
-**Legend:** ✓ applies — `-` not applicable — *italic* fixed condition. The boot chain has no dedicated directives: the userland is a stock `ADD <oci-ref> /` and boot packaging is a stock `LABEL org.imagilux.umf.flavor`.
+**Legend:** each cell gives the value the directive takes for that shape; `-` means it does not apply there. The boot chain has no dedicated directives: the userland is a stock `ADD <oci-ref> /` and boot packaging is a stock `LABEL org.imagilux.umf.flavor`.
 
 What `FROM` resolves to *is* the target marker: a `type=kernel` artifact makes the build **bootable** (the kernel is installed at L2 and the result carries a boot manifest); a base image or `scratch` makes it a **container**. Firmware is a *boot-environment* fact supplied when the disk is run or deployed (OVMF for a VM, the hardware's own firmware on bare metal), not build content. A bootable disk is byte-identical regardless of where it will boot.
 
