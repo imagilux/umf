@@ -66,10 +66,24 @@ A **bootable OS image** — one built `FROM` a `type=kernel` artifact — carrie
 | `org.imagilux.umf.kernel.vmlinuz` | Path to the kernel image within the rootfs | e.g. `/boot/vmlinuz-7.0.0` |
 | `org.imagilux.umf.kernel.cmdline` | Extra kernel cmdline appended at projection | the appliance `init=<path> [-- args]` fragment; empty for init systems |
 | `org.imagilux.umf.initramfs` | Path to the generated initramfs within the rootfs | absent ⇒ appliance (no initramfs) |
-| `org.imagilux.umf.rootfs.fs` | Root-partition filesystem the projector formats | `squashfs` · `erofs` · `ext4` |
+| `org.imagilux.umf.rootfs.fs` | Root-partition filesystem to project by **default** | `squashfs` · `erofs` · `ext4` |
 | `org.imagilux.umf.flavor` | Boot packaging the projector applies | `systemd-boot` (classic) · `uki` (Unified Kernel Image); `grub` reserved |
 
-Unlike the other rows, which the builder emits, `org.imagilux.umf.flavor` is authored directly as a normal `LABEL` (see the [LABEL](#label) directive). `umf compile` reads it: **absent ⇒ `systemd-boot` (classic), with a warning**; an unrecognised value is an error. The `root=` / `rootfstype=` / console portions of the kernel command line are derived by the projector from the partition layout and `rootfs.fs`; only `kernel.cmdline` is carried on the image. Because the disk is derived entirely from these labels plus the image's ordinary layers, the same OCI image is both a `podman`-runnable container **and** a projectable bootable artifact — "bootable" is additive metadata, not a distinct artifact kind.
+Unlike the other rows, which the builder emits, `org.imagilux.umf.flavor` is authored directly as a normal `LABEL` (see the [LABEL](#label) directive). `umf compile` reads it: **absent ⇒ `systemd-boot` (classic), with a warning**; an unrecognised value is an error. The `root=` / `rootfstype=` / console portions of the kernel command line are derived by the projector from the partition layout and the root filesystem in effect; only `kernel.cmdline` is carried on the image. Because the disk is derived entirely from these labels plus the image's ordinary layers, the same OCI image is both a `podman`-runnable container **and** a projectable bootable artifact — "bootable" is additive metadata, not a distinct artifact kind.
+
+### Root filesystem: a projection choice, not a build one
+
+`org.imagilux.umf.rootfs.fs` records the filesystem to project **by default**; it does not constrain the image. The root filesystem is a property of the *disk*, not of the OCI image — the layers are byte-identical whichever one is written — so `umf compile --fs <squashfs|ext4|erofs>` overrides it, and the same bootable image projects to squashfs on one node and ext4 on another. This is the same principle as VM-vs-bare-metal: one image, many projections.
+
+For that to hold, nothing built into the image may name a filesystem. The generated initramfs therefore reads `rootfstype=` back from `/proc/cmdline` — exactly as it already reads `root=` to find the device — and carries the driver for every filesystem in the value set. `umf compile` is the single writer of both the partition contents and the cmdline, so the bytes on disk and the type the kernel is told to mount cannot disagree.
+
+| Value | Properties | Written by |
+|-------|------------|------------|
+| `squashfs` (default) | read-only, compressed | in-process; no host tooling |
+| `erofs` | read-only, compressed, faster random access | host `mkfs.erofs` (`erofs-utils`) |
+| `ext4` | read-write, uncompressed | host `mkfs.ext4` (`e2fsprogs`) |
+
+The default is the one UMF writes itself, so a projection with no `--fs` never needs anything installed. The other two are a deliberate, narrow exception to the in-process posture — neither format has a mature pure-Rust writer — and they have **no fallback**: a root the operator asked to be `ext4` must not be silently written as something else, so a missing tool is an error naming the package. A `rootfs.fs` label naming a filesystem outside this set is likewise an error rather than a silent default.
 
 ## Multi-Stage Builds
 
@@ -240,6 +254,8 @@ Labels are inherited from previous layers when building on top of an existing im
 Re-declaring a key **overrides** it — last wins — which is how a derived image overrides a label inherited from its base. This holds for both shapes: a container build writes labels into the OCI config map, and a bootable build resolves its `org.imagilux.umf.*` boot-manifest keys the same way.
 
 On a bootable build the boot-manifest keys the builder derives (`kernel.release`, `kernel.vmlinuz`, `initramfs`, `rootfs.fs`, `entrypoint`) are written **after** the recipe's own labels, so a recipe cannot forge one and make `umf compile` read a value the builder did not derive. `org.imagilux.umf.flavor` is the exception by design: it is an *input* the author sets, so the recipe's value is what takes effect.
+
+A recipe cannot select the root filesystem either, and does not need to: it is chosen at projection time with `umf compile --fs`, which overrides the derived `rootfs.fs` default without the recipe having any say. Boot packaging (`flavor`) is a recipe input because it changes what the builder *produces*; the root filesystem is not, because it changes only what the projector *writes*.
 
 One `LABEL` may carry multiple `key=value` pairs on a single line (regular Docker style); it is exactly equivalent to writing one `LABEL` per pair.
 

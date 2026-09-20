@@ -104,7 +104,10 @@ fn save_block(
 
     // Shared with `umf compile` / `umf run` so the cache key matches exactly
     // (the geometry + variant live in one place).
-    let variant = umf_compile::DiskGeometry::default().cache_variant();
+    // `None`: this path projects with the image's recorded default
+    // filesystem — there is no `--fs` on `umf save`, so the key must match
+    // what a plain `umf compile` of the same image produced.
+    let variant = umf_compile::DiskGeometry::default().cache_variant(None);
     let block = layout.block_cache_path(&profile.manifest_digest, &variant)?;
     if !block.is_file() {
         return Err(CliArchiveError::NotCompiled {

@@ -28,6 +28,7 @@
 //! emission is the per-distro extension point, not the wider initramfs
 //! assembly.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -272,11 +273,14 @@ fn walk_ancestors(path: &Path, root_prefix: &Path) -> Vec<PathBuf> {
 ///
 /// Walks `modules_root/kernel/` looking for module files (`*.ko` or
 /// `*.ko.gz` or `*.ko.xz` or `*.ko.zst`) matching the flavor's allowlist.
-fn collect_modules_for(
-    modules_root: &Path,
-    flavor: &InitramfsFlavor,
-) -> Result<Vec<PathBuf>, InitrdError> {
-    let allowlist: &[&str] = match flavor {
+/// The kernel modules the initramfs carries, by flavor.
+///
+/// Extracted from `collect_modules_for` so a test can assert the set
+/// directly: a missing root-filesystem driver here is an unbootable disk,
+/// and the symptom is a kernel panic at switch_root rather than anything
+/// this crate could report.
+fn modules_allowlist(flavor: &InitramfsFlavor) -> &'static [&'static str] {
+    match flavor {
         // Boot: whatever might carry the root filesystem. virtio covers VMs;
         // the rest are what real hardware presents. A name absent from the
         // kernel's module tree (compiled-in, or not built) simply is not
@@ -317,7 +321,30 @@ fn collect_modules_for(
             "xhci_hcd",
             "xhci_pci",
             "usb_storage",
-            umf_core::boot::ROOTFS_FSTYPE,
+            // Every filesystem `umf compile --fs` can write. Which one this
+            // disk actually carries is not known at build time — it is a
+            // projection choice — so carry all the drivers and let the init
+            // script mount whatever `rootfstype=` names. Listing a module
+            // costs nothing when unused (see the note above), so this is the
+            // cheap half of making one image projectable to any of them.
+            //
+            // Only the drivers are named here: what each one *needs*
+            // (`ext4` → `jbd2`, `mbcache`, `crc16`, …) is resolved from
+            // `modules.dep` by `with_dependencies`.
+            "squashfs",
+            "ext4",
+            "erofs",
+            // ext4 asks the *crypto API* for "crc32c" when a filesystem has
+            // `metadata_csum` — which `mkfs.ext4` enables by default — and
+            // erofs checksums its superblock the same way. That request goes
+            // through `crypto_alloc_shash`, not through a symbol reference,
+            // so `modules.dep` does not list it and dependency resolution
+            // cannot find it. Without these the mount fails with `ENOENT`
+            // and one line of explanation: "Cannot load crc32c driver".
+            "libcrc32c",
+            "crc32c",
+            "crc32c_generic",
+            "crc32c_intel",
         ],
         InitramfsFlavor::Run => &[
             // Boot-side basics — still needed even when the rootfs is on
@@ -327,7 +354,22 @@ fn collect_modules_for(
             "virtio_pci",
             "virtio_pci_modern_dev",
             "virtio_blk",
-            umf_core::boot::ROOTFS_FSTYPE,
+            // The RUN micro-VM boots the layer state through whichever
+            // filesystem the caller staged, so carry the same set.
+            "squashfs",
+            "ext4",
+            "erofs",
+            // ext4 asks the *crypto API* for "crc32c" when a filesystem has
+            // `metadata_csum` — which `mkfs.ext4` enables by default — and
+            // erofs checksums its superblock the same way. That request goes
+            // through `crypto_alloc_shash`, not through a symbol reference,
+            // so `modules.dep` does not list it and dependency resolution
+            // cannot find it. Without these the mount fails with `ENOENT`
+            // and one line of explanation: "Cannot load crc32c driver".
+            "libcrc32c",
+            "crc32c",
+            "crc32c_generic",
+            "crc32c_intel",
             // 9p filesystem (host-staging share).
             "9p",
             "9pnet",
@@ -336,7 +378,19 @@ fn collect_modules_for(
             // package repos / git remotes / etc.
             "virtio_net",
         ],
-    };
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn modules_allowlist_for_test(flavor: &InitramfsFlavor) -> &'static [&'static str] {
+    modules_allowlist(flavor)
+}
+
+fn collect_modules_for(
+    modules_root: &Path,
+    flavor: &InitramfsFlavor,
+) -> Result<Vec<PathBuf>, InitrdError> {
+    let allowlist: &[&str] = modules_allowlist(flavor);
 
     let kernel_dir = modules_root.join("kernel");
     if !kernel_dir.is_dir() {
@@ -349,13 +403,127 @@ fn collect_modules_for(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let stem = module_stem(&name);
-        if allowlist.contains(&stem.as_str()) {
+        let key = module_key(&module_stem(&name));
+        if allowlist.iter().any(|a| module_key(a) == key) {
             out.push(entry.path().to_path_buf());
         }
     }
-    out.sort();
-    Ok(out)
+    Ok(with_dependencies(out, modules_root))
+}
+
+/// Add every module the selected ones depend on, transitively.
+///
+/// The allowlist names the drivers we want; it cannot name what those
+/// drivers need, and a module is useless without its dependencies — a
+/// loaded `ext4.ko` whose `jbd2.ko` is absent resolves no symbols, so the
+/// mount fails with `EINVAL` and PID 1 dies at `switch_root`. That is a
+/// kernel panic with no diagnostic pointing back here, which is why this
+/// resolves the closure rather than leaving the list to be hand-curated:
+/// `squashfs` happens to need nothing, so a flat list looked correct right
+/// up until a second filesystem was added.
+///
+/// Matching is by module **stem**, never by path. `modules.dep` records
+/// the paths `depmod` saw, which need not be the paths on disk now: UMF's
+/// own boot fixture decompresses every `.ko.gz` (busybox `insmod` cannot
+/// read a compressed module) and leaves `modules.dep` still naming
+/// `…/ext4.ko.gz`. Comparing paths there silently resolves nothing at all,
+/// which is a flat allowlist again — with the same kernel panic and no
+/// sign that this step ran.
+///
+/// A tree with no `modules.dep` (or an unreadable one) keeps the selected
+/// set as-is: fewer modules is the pre-existing behaviour, and the init
+/// script tolerates a missing file.
+fn with_dependencies(selected: Vec<PathBuf>, modules_root: &Path) -> Vec<PathBuf> {
+    let deps = parse_modules_dep(modules_root);
+    if deps.is_empty() {
+        let mut out = selected;
+        out.sort();
+        return out;
+    }
+
+    // Every module in the tree, by stem, so a dependency can be resolved to
+    // whatever file actually carries it.
+    let mut on_disk: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for entry in walkdir::WalkDir::new(modules_root.join("kernel"))
+        .into_iter()
+        .flatten()
+    {
+        if entry.file_type().is_file() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stem = module_stem(&name);
+            if stem != name {
+                let stem = module_key(&stem);
+                // Only real modules: `module_stem` returns the name
+                // unchanged for anything that is not a `.ko*`.
+                on_disk.insert(stem, entry.path().to_path_buf());
+            }
+        }
+    }
+
+    // BTreeSet: dedups (two drivers commonly share a dependency) and leaves
+    // the result in path order, which the init script's retry loop expects.
+    let mut resolved: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut queue: Vec<String> = selected
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|n| module_key(&module_stem(&n.to_string_lossy())))
+        .collect();
+
+    while let Some(stem) = queue.pop() {
+        // A dependency the tree does not carry is skipped rather than
+        // fatal: it is compiled into the kernel, so there is nothing to
+        // embed.
+        let Some(path) = on_disk.get(&stem) else {
+            continue;
+        };
+        if !resolved.insert(path.clone()) {
+            continue; // already walked — also what terminates a dependency cycle
+        }
+        if let Some(needed) = deps.get(&stem) {
+            queue.extend(needed.iter().cloned());
+        }
+    }
+    resolved.into_iter().collect()
+}
+
+/// Parse `modules.dep` into `module stem -> the stems it depends on`.
+///
+/// Each line is `<module path>: <dep path> <dep path> …`. Only the stems
+/// are kept: see [`with_dependencies`] for why the paths themselves are
+/// not trustworthy. `depmod` already writes the full transitive set per
+/// line, but this does not rely on that — the graph is walked here, so a
+/// hand-written or partial file still resolves.
+fn parse_modules_dep(modules_root: &Path) -> BTreeMap<String, Vec<String>> {
+    let Ok(text) = std::fs::read_to_string(modules_root.join("modules.dep")) else {
+        return BTreeMap::new();
+    };
+    let stem_of = |path: &str| -> Option<String> {
+        Path::new(path)
+            .file_name()
+            .map(|n| module_key(&module_stem(&n.to_string_lossy())))
+    };
+    let mut map = BTreeMap::new();
+    for line in text.lines() {
+        let Some((target, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(target) = stem_of(target.trim()) else {
+            continue;
+        };
+        map.insert(
+            target,
+            rest.split_whitespace().filter_map(stem_of).collect(),
+        );
+    }
+    map
+}
+
+/// Module names treat `-` and `_` as the same character — `modprobe` does,
+/// and a tree spells the file either way (`crc32c-intel.ko` on x86 against
+/// `crc32c_intel` everywhere else). Compare through this so an allowlist
+/// entry cannot miss purely on punctuation.
+fn module_key(stem: &str) -> String {
+    stem.replace('-', "_")
 }
 
 fn module_stem(filename: &str) -> String {
@@ -437,10 +605,27 @@ fn build_boot_init_script(release: &str, modules: &[PathBuf], modules_root: &Pat
     s.push_str("    exec sh\n");
     s.push_str("fi\n");
     s.push('\n');
-    s.push_str(&format!(
-        "mount -t {} -o ro \"$ROOT\" /sysroot\n",
-        umf_core::boot::ROOTFS_FSTYPE,
-    ));
+    // Take the filesystem from the cmdline for the same reason the device is
+    // taken from it: `umf compile` is the one that decided, and it wrote both.
+    // Baking a type in here instead would pin the image to one filesystem at
+    // *build* time and make `umf compile --fs` produce an unbootable disk.
+    s.push_str("# Resolve the root filesystem. `umf compile` writes\n");
+    s.push_str("# `rootfstype=<fs>` alongside `root=`; honour it rather than\n");
+    s.push_str("# assuming one, so the same image boots whichever filesystem\n");
+    s.push_str("# the disk was projected with.\n");
+    s.push_str("ROOTFSTYPE=\"\"\n");
+    s.push_str("for _arg in $(cat /proc/cmdline 2>/dev/null); do\n");
+    s.push_str("    case \"$_arg\" in rootfstype=*) ROOTFSTYPE=\"${_arg#rootfstype=}\" ;; esac\n");
+    s.push_str("done\n");
+    s.push('\n');
+    s.push_str("# No `-t` at all when the cmdline carried none: the kernel then\n");
+    s.push_str("# tries each filesystem in /proc/filesystems, which is exactly\n");
+    s.push_str("# the set the modules above just registered.\n");
+    s.push_str("if [ -n \"$ROOTFSTYPE\" ]; then\n");
+    s.push_str("    mount -t \"$ROOTFSTYPE\" -o ro \"$ROOT\" /sysroot\n");
+    s.push_str("else\n");
+    s.push_str("    mount -o ro \"$ROOT\" /sysroot\n");
+    s.push_str("fi\n");
     s.push('\n');
     s.push_str("# Pivot.\n");
     s.push_str("exec switch_root /sysroot /sbin/init\n");

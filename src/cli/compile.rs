@@ -11,6 +11,7 @@ use std::path::Path;
 use thiserror::Error;
 use tracing::info;
 use umf_compile::{CompileError, DiskGeometry, compile_image};
+use umf_core::boot::RootfsFs;
 use umf_oci::registry::{ImageLayout, RegistryError};
 
 use super::util;
@@ -43,6 +44,9 @@ pub(crate) struct CompileArgs<'a> {
     pub(crate) output: Option<&'a Path>,
     pub(crate) disk_size: Option<u64>,
     pub(crate) esp_size: Option<u64>,
+    /// `--fs`: the root filesystem to write. `None` ⇒ the image's
+    /// `rootfs.fs` label, then squashfs.
+    pub(crate) rootfs_fs: Option<RootfsFs>,
     pub(crate) layout_dir_override: Option<&'a Path>,
 }
 
@@ -74,7 +78,7 @@ pub(crate) fn run_compile(args: CompileArgs<'_>) -> Result<(), CliCompileError> 
     let (out, cached) = match args.output {
         Some(p) => (p.to_path_buf(), false),
         None => {
-            let variant = geometry.cache_variant();
+            let variant = geometry.cache_variant(args.rootfs_fs);
             let path = layout.block_cache_path(&entry.digest, &variant)?;
             let hit = path.is_file();
             (path, hit)
@@ -94,7 +98,14 @@ pub(crate) fn run_compile(args: CompileArgs<'_>) -> Result<(), CliCompileError> 
     // The bootloader comes from the image (in-image `/usr/lib/systemd/boot/efi`)
     // for the classic flavor; there is no CLI override (the `compile_image`
     // override arg is a library test seam, so pass `None`).
-    let report = compile_image(&layout, args.reference, &out, geometry, None)?;
+    let report = compile_image(
+        &layout,
+        args.reference,
+        &out,
+        geometry,
+        None,
+        args.rootfs_fs,
+    )?;
     println!(
         "Compiled {image} -> {out}\n  \
          source: {digest}\n  \

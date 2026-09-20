@@ -219,12 +219,95 @@ deliberately with a **`uki`** flavor and an **appliance** entrypoint, because a
 indistinguishable and the assertion vacuous. Both inheritance paths were
 confirmed to fail the test when broken.
 
-### P1.3 — `ext4` / `erofs` root partitions · absent · documented
+### P1.3 — `ext4` / `erofs` root partitions · ~~absent~~ implemented
 
-The boot-manifest label table lists `squashfs`, `erofs` and `ext4` as the
-`rootfs.fs` value set. The projector implements only squashfs and refuses the
-other two (`crates/umf-compile/src/image.rs:117`). Either implement them or
-narrow the spec's value set.
+The roadmap framed this as "the projector implements only squashfs" — true, but
+not the whole state. `rootfs.fs` was **builder-derived**, and the spec said in
+as many words that a recipe cannot forge a derived key. The builder hardcoded
+`squashfs`. So no author input, no build flag and no derivation rule could ever
+have produced `erofs` or `ext4`: the value set in the published label table
+described a capability with **no entry point at all**. Implementing the
+projector side alone would have left it just as unreachable.
+
+**The entry point is `umf compile --fs`, not a directive.** The root filesystem
+is a property of the *disk*, not of the image — the layers are byte-identical
+whichever one is written — so it belongs to projection, exactly like disk
+geometry and VM-vs-bare-metal. The recipe still has no say, which keeps the
+builder-derived rule intact rather than carving out a second exception beside
+`flavor`. The label survives as the *default* for projection, so images built
+before the flag existed project exactly as they always did.
+
+**What had to become filesystem-agnostic.** The initramfs was the real coupling:
+it baked the type into both its module set and `mount -t squashfs` at *build*
+time. A projection-time choice would have produced ext4 bytes under an
+initramfs still mounting squashfs — a disk that fails at switch_root and
+nowhere earlier. It now reads `rootfstype=` back from `/proc/cmdline`, exactly
+as it already read `root=` for the device, and carries the driver for all
+three. Listing extra modules is free by the allowlist's own existing rationale.
+
+**Writers.** squashfs stays in-process (`backhand`), so the default projection
+still needs nothing installed on an air-gapped node. ext4 and erofs shell out
+to `mkfs.ext4` / `mkfs.erofs` — neither has a mature pure-Rust writer — with
+**no fallback**, unlike the erofs *layer cache*, which falls back because there
+the result is identical either way. Both tools run unprivileged and preserve
+ownership, modes and device nodes, so this adds no privilege requirement.
+
+**Two bugs found while building it, both silent:**
+
+- The `--fs` selection was missing from the **block-cache key**. `umf compile
+  --fs ext4` after a plain compile would have been served the cached squashfs
+  disk — a wrong artifact, not a missing one. The key is the image digest plus
+  the variant, and a digest pins the label, so the override is the only free
+  variable and is sufficient on its own.
+- `image_bytes` for squashfs read `stream_position()` after the write, which is
+  **96 bytes** regardless of image size: `backhand` seeks back to offset 0 to
+  lay down the superblock last. Every size check against it silently passed and
+  every size logged from it was wrong. Now tracked as a high-water mark.
+
+**Verification.** The end-to-end test projects one image to each filesystem and
+asserts the ROOTFS superblock and the loader entry's `rootfstype=` name the
+same one — the lockstep invariant the design rests on. Confirmed to fail when
+the cmdline is pinned to the default while the partition honours `--fs`. The
+sparse copy, which is new logic and corrupts images silently if wrong, has four
+tests, all confirmed to fail under two separate compiling sabotages.
+
+**Boot proof — squashfs and ext4 both reach userspace; erofs is `unproven`.**
+`tests/boot_smoke.rs` projects and boots the fixture once per filesystem. It
+could not be run locally (no KVM, no local kernel, and the network policy
+blocks both Docker Hub's CDN and Alpine's), so it was proved in CI:
+
+```
+boot-smoke OK (squashfs): observed userspace marker "UMF-BOOT-OK-7f3a2c9d"
+boot-smoke OK (ext4):     observed userspace marker "UMF-BOOT-OK-7f3a2c9d"
+SKIP erofs boot: `mkfs.erofs` absent
+```
+
+erofs stays unproven until `erofs-utils` is installed in `boot-smoke.yml`;
+`UMF_REQUIRE_MKFS=1` then turns that skip into a failure.
+
+**The boot lane earned its cost three times over.** Every in-process test
+passed while the disk did not boot, and each failure was a distinct thing no
+build-time check could have seen:
+
+1. **Link-time deps.** `ext4.ko` was embedded without `jbd2` / `mbcache` /
+   `crc16`. It loads, every `jbd2_*` symbol resolves to nothing, the mount
+   returns `EINVAL` and PID 1 dies at switch_root. The flat allowlist was not
+   wrong before — `squashfs` needs no other module, so it looked correct right
+   up until a second filesystem existed. Fixed by resolving `modules.dep`.
+2. **A fix that silently did nothing.** That resolution keyed on paths, but
+   `make-boot-fixture.sh` gunzips every `.ko.gz` without re-running `depmod`,
+   so `modules.dep` still named `jbd2.ko.gz` while the file was `jbd2.ko`.
+   Zero matches, zero dependencies, silent fallback to the flat list — the
+   identical panic, with nothing to show the new code had run. Fixed by
+   keying on the module stem, which also survives any repacking of a kernel
+   artifact rather than just our own fixture.
+3. **A dependency no graph can express.** `mkfs.ext4` enables `metadata_csum`
+   by default, so mounting asks the *crypto API* for a `crc32c` shash by
+   algorithm name. That is not a symbol reference, so it appears nowhere in
+   `modules.dep` and no amount of correct resolution finds it.
+
+The lesson worth keeping: "the driver is present" is not "the filesystem
+mounts". Only a boot distinguishes them.
 
 ### P1.4 — Cross-architecture `RUN` execution · absent · documented
 

@@ -83,7 +83,7 @@ fn produces_valid_gzip_cpio() {
 }
 
 #[test]
-fn init_script_references_modules_and_squashfs_mount() {
+fn init_script_references_modules_and_mounts_the_root() {
     let release = "6.6.79";
     let staging = seed_busybox_shaped_staging(release);
     let kernel = synthetic_kernel_layout(staging.path(), release);
@@ -107,13 +107,69 @@ fn init_script_references_modules_and_squashfs_mount() {
         "init does not load the embedded modules"
     );
     assert!(
-        text.contains("mount -t squashfs"),
-        "init missing squashfs mount"
+        text.contains("/sysroot"),
+        "init does not mount the root onto /sysroot"
     );
     assert!(
         text.contains("switch_root /sysroot"),
         "init missing switch_root"
     );
+}
+
+/// The root filesystem is chosen at **projection** time by `umf compile --fs`,
+/// long after this initramfs was generated, so the init script must not name
+/// one. It reads `rootfstype=` back from the cmdline the projector wrote —
+/// exactly as it already reads `root=` for the device.
+///
+/// Baking a type in here instead is what made one built image projectable to
+/// only one filesystem: `umf compile --fs ext4` would have produced a disk of
+/// ext4 bytes whose initramfs still ran `mount -t squashfs`, and it would not
+/// boot.
+#[test]
+fn boot_init_takes_the_root_filesystem_from_the_cmdline() {
+    let script = build_boot_init_script("7.0.0-umf", &[], Path::new("/lib/modules"));
+
+    assert!(
+        script.contains("rootfstype="),
+        "init must read rootfstype= from the cmdline: {script}",
+    );
+    assert!(
+        script.contains("mount -t \"$ROOTFSTYPE\""),
+        "init must mount with the type it read, not a literal: {script}",
+    );
+    // No hardcoded filesystem anywhere in the mount path.
+    for fs in umf_core::boot::RootfsFs::ALL {
+        assert!(
+            !script.contains(&format!("mount -t {fs}")),
+            "init must not hardcode `mount -t {fs}`: {script}",
+        );
+    }
+    // And a cmdline that carried no rootfstype= must still mount, by letting
+    // the kernel try every filesystem the modules registered.
+    assert!(
+        script.contains("mount -o ro \"$ROOT\" /sysroot"),
+        "init needs a no-type fallback mount: {script}",
+    );
+}
+
+/// The initramfs cannot know which filesystem the disk will be projected
+/// with, so it carries the driver for every one `umf compile --fs` accepts.
+/// A missing module here is an unbootable disk for that filesystem, and the
+/// failure is a kernel panic at switch_root rather than anything this crate
+/// would catch.
+#[test]
+fn boot_initramfs_carries_a_driver_for_every_projectable_filesystem() {
+    let script = build_boot_init_script("7.0.0-umf", &[], Path::new("/lib/modules"));
+    // The module set is embedded in the script's `UMF_MODS` list via the
+    // allowlist; assert the allowlist itself names each filesystem.
+    let allow = super::modules_allowlist_for_test(&InitramfsFlavor::Boot);
+    for fs in umf_core::boot::RootfsFs::ALL {
+        assert!(
+            allow.contains(&fs.as_str()),
+            "boot initramfs must carry the {fs} driver; allowlist: {allow:?}",
+        );
+    }
+    let _ = script;
 }
 
 #[test]
@@ -331,4 +387,201 @@ fn the_run_init_configures_a_staged_static_network() {
     );
     // DHCP stays as the fallback for the user-mode-stack path.
     assert!(script.contains("udhcpc"), "DHCP fallback must remain");
+}
+
+/// Regression, from a real boot failure: selecting `ext4` must also embed
+/// `jbd2`, `mbcache` and `crc16`.
+///
+/// The allowlist names drivers, not what drivers need. `squashfs` needs
+/// nothing, so a flat list looked correct until a second filesystem was
+/// added — and the failure gives no hint at this code. `ext4.ko` loads,
+/// every `jbd2_*` symbol resolves to nothing, `mount` returns `EINVAL`,
+/// PID 1 exits and the kernel panics at `switch_root`:
+///
+/// ```text
+/// ext4: Unknown symbol jbd2_journal_init_inode (err -2)
+/// mount: mounting /dev/vda2 on /sysroot failed: Invalid argument
+/// Kernel panic - not syncing: Attempted to kill init!
+/// ```
+#[test]
+fn a_filesystem_driver_brings_its_dependencies_with_it() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+
+    // A module tree shaped like Alpine's: the driver in one place, the
+    // libraries it needs scattered elsewhere.
+    for rel in [
+        "kernel/fs/ext4/ext4.ko.gz",
+        "kernel/fs/jbd2/jbd2.ko.gz",
+        "kernel/fs/mbcache.ko.gz",
+        "kernel/lib/crc16.ko.gz",
+        "kernel/fs/squashfs/squashfs.ko.gz",
+        // Present in the tree but reachable from nothing in the allowlist.
+        "kernel/fs/xfs/xfs.ko.gz",
+    ] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"\x1f\x8b").unwrap();
+    }
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/ext4/ext4.ko.gz: kernel/fs/jbd2/jbd2.ko.gz kernel/fs/mbcache.ko.gz \
+         kernel/lib/crc16.ko.gz\n\
+         kernel/fs/jbd2/jbd2.ko.gz:\n\
+         kernel/fs/squashfs/squashfs.ko.gz:\n\
+         kernel/fs/xfs/xfs.ko.gz:\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+
+    for needed in ["ext4", "jbd2", "mbcache", "crc16"] {
+        assert!(
+            names.iter().any(|n| n == needed),
+            "`{needed}` must be embedded — ext4 cannot mount without it: {names:?}",
+        );
+    }
+    assert!(
+        !names.iter().any(|n| n == "xfs"),
+        "dependency resolution must not drag in unrelated modules: {names:?}",
+    );
+}
+
+/// A tree with no `modules.dep` still yields the allowlisted modules. Some
+/// kernel packages ship without one, and fewer modules is the behaviour
+/// that predates dependency resolution — never an error.
+#[test]
+fn a_tree_without_modules_dep_still_collects_the_allowlist() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    for rel in ["kernel/fs/squashfs/squashfs.ko", "kernel/fs/ext4/ext4.ko"] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stub").unwrap();
+    }
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+    assert!(names.iter().any(|n| n == "squashfs"), "{names:?}");
+    assert!(names.iter().any(|n| n == "ext4"), "{names:?}");
+}
+
+/// A dependency naming a module the tree does not carry is skipped, not
+/// fatal: the kernel compiled it in, so there is nothing to embed.
+#[test]
+fn a_dependency_absent_from_the_tree_is_not_an_error() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    let path = root.join("kernel/fs/erofs/erofs.ko");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"stub").unwrap();
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/erofs/erofs.ko: kernel/lib/lz4/lz4_decompress.ko\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    assert_eq!(picked.len(), 1, "only the module that exists: {picked:?}");
+}
+
+/// Regression, from the second boot failure of the same feature: the
+/// dependency lookup must survive `modules.dep` naming files that no longer
+/// exist under those names.
+///
+/// `scripts/make-boot-fixture.sh` gunzips every `.ko.gz` in the tree,
+/// because busybox `insmod` cannot read a compressed module — but
+/// `modules.dep` is copied verbatim and still says `…/jbd2.ko.gz`. A
+/// path-keyed lookup matches nothing, resolves no dependencies, and
+/// degrades silently to the flat allowlist: the same `Unknown symbol
+/// jbd2_*` panic as before the fix, with nothing to show the resolution
+/// step ran at all.
+#[test]
+fn dependencies_resolve_when_modules_dep_names_a_stale_compression_suffix() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+
+    // On disk: decompressed, exactly as the fixture leaves them.
+    for rel in [
+        "kernel/fs/ext4/ext4.ko",
+        "kernel/fs/jbd2/jbd2.ko",
+        "kernel/fs/mbcache.ko",
+        "kernel/lib/crc16.ko",
+    ] {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stub").unwrap();
+    }
+    // In modules.dep: the `.ko.gz` names depmod originally saw.
+    std::fs::write(
+        root.join("modules.dep"),
+        "kernel/fs/ext4/ext4.ko.gz: kernel/fs/jbd2/jbd2.ko.gz kernel/fs/mbcache.ko.gz \
+         kernel/lib/crc16.ko.gz\n",
+    )
+    .unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    let names: Vec<String> = picked
+        .iter()
+        .map(|p| module_stem(&p.file_name().unwrap().to_string_lossy()))
+        .collect();
+
+    for needed in ["ext4", "jbd2", "mbcache", "crc16"] {
+        assert!(
+            names.iter().any(|n| n == needed),
+            "`{needed}` must resolve despite the stale `.ko.gz` in modules.dep: {names:?}",
+        );
+    }
+}
+
+/// Regression, from the third boot failure of the same feature: ext4 needs
+/// a `crc32c` *crypto* provider, which no dependency graph will reveal.
+///
+/// `mkfs.ext4` enables `metadata_csum` by default, so mounting asks the
+/// crypto API for a "crc32c" shash via `crypto_alloc_shash`. That is a
+/// runtime request by algorithm name, not a symbol reference, so it does
+/// not appear in `modules.dep` and `with_dependencies` cannot infer it.
+/// The mount then fails with `ENOENT` and exactly one line of explanation:
+///
+/// ```text
+/// EXT4-fs (vda2): Cannot load crc32c driver.
+/// mount: mounting /dev/vda2 on /sysroot failed: No such file or directory
+/// ```
+#[test]
+fn the_boot_initramfs_carries_a_crc32c_provider() {
+    let boot = modules_allowlist_for_test(&InitramfsFlavor::Boot);
+    assert!(
+        boot.contains(&"crc32c_generic"),
+        "ext4 with metadata_csum cannot mount without a crc32c shash: {boot:?}",
+    );
+    assert!(
+        boot.contains(&"libcrc32c"),
+        "the crc32c wrapper the filesystems link against: {boot:?}",
+    );
+}
+
+/// `-` and `_` are the same character in a module name. x86 spells the
+/// accelerated driver `crc32c-intel.ko` while every reference to it uses an
+/// underscore, so matching the raw filename silently drops it.
+#[test]
+fn module_matching_ignores_dash_versus_underscore() {
+    let tree = tempfile::tempdir().expect("tempdir");
+    let root = tree.path();
+    let path = root.join("kernel/arch/x86/crypto/crc32c-intel.ko");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"stub").unwrap();
+
+    let picked = collect_modules_for(root, &InitramfsFlavor::Boot).expect("collect");
+    assert_eq!(
+        picked.len(),
+        1,
+        "`crc32c_intel` must match the file spelled `crc32c-intel.ko`: {picked:?}",
+    );
 }

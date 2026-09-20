@@ -18,10 +18,10 @@ use gpt::mbr::ProtectiveMBR;
 use gpt::{GptConfig, partition_types};
 use tracing::{debug, info};
 use umf_core::architecture::Architecture;
-use umf_core::boot::{ROOTFS_FSTYPE, ROOTFS_PARTLABEL};
+use umf_core::boot::{ROOTFS_PARTLABEL, RootfsFs};
 
 use crate::error::CompileError;
-use crate::filesystem::write_squashfs_from_dir;
+use crate::filesystem::write_rootfs_from_dir;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -88,12 +88,49 @@ impl Default for DiskGeometry {
 
 impl DiskGeometry {
     /// Block-cache variant key for this geometry: the disk and ESP sizes packed
-    /// as two zero-padded 16-hex-digit fields. Two compiles with the same source
-    /// image but different geometry land in distinct cache slots; identical
-    /// geometry hits the same slot. The CLI uses this instead of hand-rolling
-    /// the format string at each call site.
-    pub fn cache_variant(&self) -> String {
-        format!("{:016x}{:016x}", self.disk_size_bytes, self.esp_size_bytes)
+    /// as two zero-padded 16-hex-digit fields, plus the `--fs` override. Two
+    /// compiles with the same source image but different geometry land in
+    /// distinct cache slots; identical geometry hits the same slot. The CLI
+    /// uses this instead of hand-rolling the format string at each call site.
+    ///
+    /// The override belongs in the key because it changes the bytes of the
+    /// projected disk. It is *sufficient* on its own — the source image digest
+    /// is already part of the cache path, and a digest pins the image's
+    /// `rootfs.fs` label, so for a given digest the override is the only thing
+    /// that can vary the filesystem. Without this, `umf compile --fs ext4`
+    /// after a plain compile would hand back the cached squashfs disk.
+    ///
+    /// An explicit `--fs squashfs` keys differently from passing no flag even
+    /// though both project squashfs. That costs at most one duplicate cache
+    /// entry and never a wrong hit, which is the right side to err on.
+    ///
+    /// The selector is encoded as two more hex digits rather than the
+    /// filesystem's name: the layout validates a block-cache variant as
+    /// non-empty hex before using it as a path component, which is what stops
+    /// a variant from ever containing a separator or `..`. Widening that
+    /// validator to admit a readable suffix would trade a path-safety
+    /// guarantee for prettier cache filenames.
+    pub fn cache_variant(&self, rootfs_fs_override: Option<RootfsFs>) -> String {
+        format!(
+            "{:016x}{:016x}{:02x}",
+            self.disk_size_bytes,
+            self.esp_size_bytes,
+            fs_cache_tag(rootfs_fs_override),
+        )
+    }
+}
+
+/// Stable cache-key tag for a `--fs` selection.
+///
+/// Written as an explicit match rather than an index into `RootfsFs::ALL` so
+/// that reordering that array cannot silently repoint every existing cache
+/// entry at the wrong disk. A new filesystem takes the next free value.
+const fn fs_cache_tag(rootfs_fs_override: Option<RootfsFs>) -> u8 {
+    match rootfs_fs_override {
+        None => 0x00,
+        Some(RootfsFs::Squashfs) => 0x01,
+        Some(RootfsFs::Ext4) => 0x02,
+        Some(RootfsFs::Erofs) => 0x03,
     }
 }
 
@@ -117,6 +154,12 @@ pub struct DiskInputs<'a> {
     /// Extra kernel-cmdline tokens — the appliance `init=<path> [-- args]`
     /// fragment; empty for init-system builds.
     pub extra_cmdline: &'a str,
+    /// Root filesystem to write into the ROOTFS partition. Chosen at
+    /// projection time (`umf compile --fs`), defaulting to the image's
+    /// `rootfs.fs` label and then to squashfs. The same value is written to
+    /// the cmdline as `rootfstype=`, so the bytes on disk and the token the
+    /// kernel reads always come from here.
+    pub rootfs_fs: RootfsFs,
 }
 
 /// Byte offsets/sizes [`project_disk`] laid down, for inspection + reporting.
@@ -136,7 +179,7 @@ pub struct DiskProjection {
 
 /// Project `inputs` into a bootable GPT disk image at `disk_path`: lay down the
 /// protective MBR + GPT (ESP + ROOTFS), populate the ESP (a classic loader
-/// entry or a UKI), and write the rootfs partition as SquashFS.
+/// entry or a UKI), and write the rootfs partition as `inputs.rootfs_fs`.
 pub fn project_disk(
     disk_path: &Path,
     inputs: &DiskInputs<'_>,
@@ -156,11 +199,18 @@ pub fn project_disk(
         inputs.initrd,
         inputs.architecture,
         inputs.extra_cmdline,
+        inputs.rootfs_fs,
     )?;
 
     let rootfs_start = layout.rootfs_first_lba * LOGICAL_BLOCK_SIZE;
     let rootfs_size = layout.rootfs_size_lba * LOGICAL_BLOCK_SIZE;
-    write_rootfs_partition(disk_path, rootfs_start, rootfs_size, inputs.rootfs_dir)?;
+    write_rootfs_partition(
+        disk_path,
+        rootfs_start,
+        rootfs_size,
+        inputs.rootfs_dir,
+        inputs.rootfs_fs,
+    )?;
 
     Ok(DiskProjection {
         disk_size_bytes: plan.disk_size_bytes,
@@ -338,6 +388,7 @@ pub(crate) fn populate_esp(
     initrd: Option<(&[u8], &str)>,
     architecture: Architecture,
     extra_cmdline: &str,
+    rootfs_fs: RootfsFs,
 ) -> Result<(), CompileError> {
     let file = OpenOptions::new().read(true).write(true).open(disk_path)?;
     let mut view = PartitionView::new(file, esp_start_bytes, esp_size_bytes, "ESP");
@@ -354,7 +405,7 @@ pub(crate) fn populate_esp(
 
     // The kernel command line is shared by both packaging paths: the `options`
     // line of the classic loader entry, and the `.cmdline` baked into the UKI.
-    let cmdline = boot_cmdline(extra_cmdline, architecture);
+    let cmdline = boot_cmdline(extra_cmdline, architecture, rootfs_fs);
 
     {
         let root = fs.root_dir();
@@ -439,11 +490,11 @@ pub(crate) fn populate_esp(
 /// partition is created with the GPT name `ROOTFS`. PARTLABEL is preferred over
 /// PARTUUID here because it stays deterministic without UMF having to control
 /// the GPT partition GUID (which the `gpt` crate randomizes).
-fn boot_cmdline(extra_cmdline: &str, architecture: Architecture) -> String {
+fn boot_cmdline(extra_cmdline: &str, architecture: Architecture, rootfs_fs: RootfsFs) -> String {
     format!(
         "root=PARTLABEL={partlabel} rootfstype={fstype} ro console={console},115200n8{extra_cmdline}",
         partlabel = ROOTFS_PARTLABEL,
-        fstype = ROOTFS_FSTYPE,
+        fstype = rootfs_fs.as_str(),
         console = architecture.serial_console(),
     )
 }
@@ -455,18 +506,30 @@ pub(crate) fn write_rootfs_partition(
     partition_start: u64,
     partition_size: u64,
     rootfs_dir: &Path,
+    rootfs_fs: RootfsFs,
 ) -> Result<(), CompileError> {
     let file = OpenOptions::new().read(true).write(true).open(disk_path)?;
     let mut view = PartitionView::new(file, partition_start, partition_size, ROOTFS_PARTLABEL);
     view.seek(SeekFrom::Start(0))?;
-    let report = write_squashfs_from_dir(rootfs_dir, &mut view)?;
-    info!(
-        files = report.files,
-        dirs = report.directories,
-        symlinks = report.symlinks,
-        skipped = report.skipped_special_nodes,
-        "ROOTFS partition populated (squashfs)",
-    );
+    let report = write_rootfs_from_dir(rootfs_fs, rootfs_dir, &mut view, partition_size)?;
+    // Per-node counts exist only for the filesystem this crate walks itself;
+    // the host `mkfs` tools do their own traversal and report none.
+    match &report.nodes {
+        Some(nodes) => info!(
+            fs = %report.fs,
+            image_bytes = report.image_bytes,
+            files = nodes.files,
+            dirs = nodes.directories,
+            symlinks = nodes.symlinks,
+            skipped = nodes.skipped_special_nodes,
+            "ROOTFS partition populated",
+        ),
+        None => info!(
+            fs = %report.fs,
+            image_bytes = report.image_bytes,
+            "ROOTFS partition populated",
+        ),
+    }
     Ok(())
 }
 

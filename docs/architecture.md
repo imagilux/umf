@@ -19,7 +19,7 @@ umf-core            shared types, errors, AST, org.imagilux.umf.* label constant
  │                  rtnetlink + nft masquerade), plus host-side cloud-hypervisor
  │                  VM port-forwarding (netns + tap + nft DNAT + pluggable DHCP);
  │                  no internal umf deps; used by umf-engine (egress) + umf run (VM net)
- ├─ umf-compile     disk projector: a type=bootable OCI image → a GPT/ESP/UKI/squashfs
+ ├─ umf-compile     disk projector: a type=bootable OCI image → a GPT/ESP/UKI/rootfs
  │                  disk, all userspace (gpt/fatfs/backhand), driven by the boot
  │                  manifest (depends on core + oci; no parser, no engine)
  └─ umf-builder     AST → OCI images: L0 introspection, FROM resolution, container
@@ -50,7 +50,7 @@ L4+ RUN / ADD / ENV / …       user-space; RUN runs in a micro-VM booted from
                               the current layer state
 ```
 
-The result carries `type=bootable`: runnable as a container, pushable like any image, and a valid `FROM` to extend. **No disk yet** — `umf-compile` reads the boot manifest, materializes the rootfs, and shapes the GPT/ESP boot partition (the L0 step, deferred to compile time) — a classic bootloader entry or a UKI, plus the squashfs root — writing a local block (never an OCI artifact). `umf run` runs this projection automatically before booting.
+The result carries `type=bootable`: runnable as a container, pushable like any image, and a valid `FROM` to extend. **No disk yet** — `umf-compile` reads the boot manifest, materializes the rootfs, and shapes the GPT/ESP boot partition (the L0 step, deferred to compile time) — a classic bootloader entry or a UKI, plus the root filesystem selected by `--fs` — writing a local block (never an OCI artifact). `umf run` runs this projection automatically before booting.
 
 Each filesystem-modifying directive becomes one content-addressed layer; re-builds reuse layers whose input hash (directive text + input context) is unchanged — Docker-equivalent caching semantics. Compiled blocks are likewise content-addressed (image digest + geometry), so a repeat compile / run is a cache hit.
 

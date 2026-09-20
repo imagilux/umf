@@ -192,14 +192,25 @@ or export `UMF_REGISTRY_USERNAME` / `UMF_REGISTRY_PASSWORD`, or add an inline
 pull-through mirror, or hosting the base on a registry without anonymous
 throttling, avoids the limit entirely.
 
-## `umf compile` rejects a non-squashfs rootfs
+## `umf compile` cannot write the requested root filesystem
 
 ```
-... squashfs ROOTFS partition (ext4 / erofs are not implemented); rebuild with
-the default squashfs rootfs
+`mkfs.erofs` is required to write a erofs root partition but was not found on
+PATH; install it (erofs-utils), or project with `--fs squashfs`, which needs no
+host tooling
 ```
 
-The disk projector only writes a **squashfs** root partition today. If an image carries `org.imagilux.umf.rootfs.fs=ext4` (or `erofs`), `umf compile` rejects it; rebuild with the default squashfs rootfs. See [Known limitations](known-limitations.md#ext4-erofs-root-partition-at-compile).
+`--fs ext4` / `--fs erofs` shell out to `mkfs.ext4` (`e2fsprogs`) and `mkfs.erofs` (`erofs-utils`). There is no fallback by design — writing a different filesystem than the one asked for would produce a disk you did not request — so install the package, or use the default `squashfs`, which is written in-process. See [Known limitations](known-limitations.md#ext4-erofs-root-partitions-need-host-tooling).
+
+## `umf compile` rejects the image's `rootfs.fs`
+
+```
+boot-manifest label `org.imagilux.umf.rootfs.fs` is `btrfs`, which is not a
+filesystem `umf compile` can write (supported: squashfs, ext4, erofs); override
+it with `umf compile --fs <fs>`
+```
+
+The label is the image's only statement about its root filesystem, so an unrecognised value is an error rather than a silent fall back to the default. Either rebuild the image, or override the value for this projection with `--fs`.
 
 ## `umf compile` rejects the flavor
 

@@ -62,18 +62,50 @@ fn cache_variant_packs_geometry_as_two_hex_fields() {
         disk_size_bytes: 0x1234,
         esp_size_bytes: 0xABCD,
     };
-    // Two zero-padded 16-hex-digit fields, concatenated (32 chars total):
-    // disk 0x1234 then esp 0xabcd.
-    let variant = geom.cache_variant();
-    assert_eq!(variant.len(), 32);
-    assert_eq!(variant, "0000000000001234000000000000abcd");
+    // Two zero-padded 16-hex-digit fields, then the filesystem selector.
+    let variant = geom.cache_variant(None);
+    // disk 0x1234, esp 0xabcd, then `00` for "no --fs override".
+    assert_eq!(variant, "0000000000001234000000000000abcd00");
     // Distinct geometries produce distinct keys; identical ones collide.
     let swapped = DiskGeometry {
         disk_size_bytes: 0xABCD,
         esp_size_bytes: 0x1234,
     };
-    assert_ne!(geom.cache_variant(), swapped.cache_variant());
-    assert_eq!(geom.cache_variant(), geom.cache_variant());
+    assert_ne!(geom.cache_variant(None), swapped.cache_variant(None));
+    assert_eq!(geom.cache_variant(None), geom.cache_variant(None));
+}
+
+/// The `--fs` override changes the bytes of the projected disk, so it must
+/// change the block-cache key. Without this, `umf compile --fs ext4` after a
+/// plain compile of the same image would be served the cached **squashfs**
+/// disk — a silently wrong artifact, not a missing one.
+#[test]
+fn the_filesystem_override_separates_cache_slots() {
+    let geom = DiskGeometry {
+        disk_size_bytes: 0x1234,
+        esp_size_bytes: 0xABCD,
+    };
+    let default = geom.cache_variant(None);
+    let mut seen = std::collections::BTreeSet::new();
+    seen.insert(default.clone());
+    for fs in RootfsFs::ALL {
+        let variant = geom.cache_variant(Some(fs));
+        assert!(
+            seen.insert(variant.clone()),
+            "{fs} must key differently from every other selection: {variant}",
+        );
+        // Hex only: the layout rejects a variant that is not, because it
+        // becomes a path component.
+        assert!(
+            variant.chars().all(|c| c.is_ascii_hexdigit()),
+            "the key must stay hex to pass layout validation: {variant}",
+        );
+    }
+    // Same geometry + same override is still a hit.
+    assert_eq!(
+        geom.cache_variant(Some(RootfsFs::Ext4)),
+        geom.cache_variant(Some(RootfsFs::Ext4)),
+    );
 }
 
 #[test]
@@ -87,7 +119,7 @@ fn default_geometry_uses_the_documented_defaults() {
 
 #[test]
 fn boot_cmdline_uses_partlabel_not_a_bus_specific_node() {
-    let cmd = boot_cmdline("", Architecture::X86_64);
+    let cmd = boot_cmdline("", Architecture::X86_64, RootfsFs::default());
     // Bus-agnostic root reference: the same disk must boot on
     // virtio / NVMe / SATA without a hardcoded /dev/vdaN node.
     assert!(cmd.contains("root=PARTLABEL=ROOTFS"), "cmdline: {cmd}");
@@ -97,7 +129,36 @@ fn boot_cmdline_uses_partlabel_not_a_bus_specific_node() {
     );
     assert!(cmd.contains("rootfstype=squashfs"));
     // The appliance fragment is appended verbatim.
-    assert!(boot_cmdline(" init=/app", Architecture::X86_64).ends_with(" init=/app"));
+    assert!(
+        boot_cmdline(" init=/app", Architecture::X86_64, RootfsFs::default())
+            .ends_with(" init=/app")
+    );
+}
+
+/// The `rootfstype=` token is what the initramfs reads back to decide how to
+/// mount the root, and it is the only thing that tells the kernel which
+/// driver to use on the appliance path (no initramfs at all). If it did not
+/// track the filesystem actually written, `umf compile --fs ext4` would
+/// produce a disk carrying ext4 bytes under a cmdline naming squashfs — which
+/// does not boot.
+#[test]
+fn boot_cmdline_rootfstype_tracks_the_filesystem_written() {
+    for fs in RootfsFs::ALL {
+        let cmd = boot_cmdline("", Architecture::X86_64, fs);
+        assert!(
+            cmd.contains(&format!("rootfstype={fs}")),
+            "cmdline must name {fs}: {cmd}",
+        );
+        // And must not also name any other one.
+        for other in RootfsFs::ALL {
+            if other != fs {
+                assert!(
+                    !cmd.contains(&format!("rootfstype={other}")),
+                    "cmdline for {fs} must not mention {other}: {cmd}",
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -105,8 +166,14 @@ fn boot_cmdline_serial_console_tracks_target_arch() {
     // x86 16550 (`ttyS0`) vs aarch64 PL011 (`ttyAMA0`): a disk told the wrong
     // console device boots with no serial output. The console must follow the
     // *target* arch, not the build host.
-    assert!(boot_cmdline("", Architecture::X86_64).contains("console=ttyS0,115200n8"));
-    assert!(boot_cmdline("", Architecture::Aarch64).contains("console=ttyAMA0,115200n8"));
+    assert!(
+        boot_cmdline("", Architecture::X86_64, RootfsFs::default())
+            .contains("console=ttyS0,115200n8")
+    );
+    assert!(
+        boot_cmdline("", Architecture::Aarch64, RootfsFs::default())
+            .contains("console=ttyAMA0,115200n8")
+    );
 }
 
 #[test]
@@ -158,6 +225,7 @@ fn project_disk_writes_squashfs_rootfs_and_loader_entry() {
             initrd: Some((&[0x1f, 0x8b, b'I', b'N'], "initramfs-7.0.img")),
             architecture: Architecture::X86_64,
             extra_cmdline: "",
+            rootfs_fs: RootfsFs::default(),
         },
     )
     .expect("project");
@@ -241,6 +309,7 @@ fn project_disk_bootloader_none_builds_a_uki() {
             initrd: None,
             architecture: Architecture::X86_64,
             extra_cmdline: " init=/myapp",
+            rootfs_fs: RootfsFs::default(),
         },
     )
     .expect("project uki");

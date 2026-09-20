@@ -71,11 +71,14 @@ A rootless (non-root) `umf build` runs inside a single user namespace UMF enters
 
 ## Disk projection (`umf compile`)
 
-### ext4 / erofs root partition at compile
+### ext4 / erofs root partitions need host tooling
 
-`umf compile` writes a **squashfs** root partition only. An image whose boot manifest sets `org.imagilux.umf.rootfs.fs=ext4` or `=erofs` is rejected: *ext4 / erofs are not implemented; rebuild with the default squashfs rootfs*.
+`umf compile --fs ext4` and `--fs erofs` shell out to `mkfs.ext4` (`e2fsprogs`) and `mkfs.erofs` (`erofs-utils`). Neither format has a mature pure-Rust writer, so unlike the default they are not written in-process.
 
-- **Spec vs. impl.** The [boot-manifest labels](specification.md#boot-manifest-labels) table lists `squashfs` / `erofs` / `ext4` as the `rootfs.fs` value set; only `squashfs` is implemented by the projector.
+There is deliberately **no fallback**. A root the operator asked to be `ext4` must not be silently written as something else, so a missing tool is an error naming the package rather than a quiet substitution. This differs from the erofs *layer cache*, which does fall back to a pure-Rust unpack because there the result is identical either way.
+
+- **Impact.** `umf compile` with no `--fs` still needs nothing installed — the default `squashfs` keeps the projector pure-Rust and usable on a bare air-gapped node. Only the opt-in paths carry the dependency.
+- **Both tools run unprivileged** and preserve ownership, modes and device nodes, so this adds no privilege requirement.
 
 ### `grub` flavor
 

@@ -713,9 +713,12 @@ pub async fn build_vm(
             format!("/boot/{}", report.filename),
         );
     }
+    // The build records the *default* filesystem for projection, not a
+    // constraint: the layers are identical whichever one `umf compile --fs`
+    // ends up writing, and the initramfs mounts whatever `rootfstype=` names.
     labels.insert(
         label::ROOTFS_FS.to_string(),
-        umf_core::boot::ROOTFS_FSTYPE.to_string(),
+        umf_core::boot::RootfsFs::default().as_str().to_string(),
     );
     labels.insert(label::FLAVOR.to_string(), flavor.clone());
 

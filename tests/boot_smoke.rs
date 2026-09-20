@@ -201,64 +201,103 @@ fn boots_to_userspace_under_qemu() {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // --- umf compile -> raw disk image ---
-    let disk = tmp.path().join("disk.img");
-    let compile = AssertCommand::cargo_bin("umf")
-        .expect("umf binary")
-        .args(["compile", "local/boot:test", "-o", disk.to_str().unwrap()])
-        .args(["--layout-dir", layout_arg])
-        .output()
-        .expect("run umf compile");
-    assert!(
-        compile.status.success(),
-        "umf compile failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&compile.stdout),
-        String::from_utf8_lossy(&compile.stderr),
-    );
-    assert!(disk.is_file(), "compile produced no disk image");
+    // --- umf compile -> boot, once per root filesystem ---
+    //
+    // The filesystem is a projection choice, so the image built above is
+    // reused verbatim for every one: that reuse is itself part of what is
+    // being proved. A disk is only "bootable with ext4" if the kernel mounts
+    // the ext4 root and reaches userspace, which no in-process check can
+    // establish — a correct superblock and a matching `rootfstype=` still
+    // leave the question of whether the initramfs carries the driver.
+    for fs in ["squashfs", "ext4", "erofs"] {
+        if let Some(tool) = mkfs_for(fs) {
+            if !have(tool) {
+                assert!(
+                    !require_mkfs(),
+                    "UMF_REQUIRE_MKFS is set but `{tool}` is missing — this lane is \
+                     supposed to boot a {fs} root and would otherwise report green \
+                     having booted only squashfs",
+                );
+                eprintln!("SKIP {fs} boot: `{tool}` absent");
+                continue;
+            }
+        }
 
-    // --- boot under QEMU/KVM with split OVMF; capture the serial console ---
-    let vars = tmp.path().join("OVMF_VARS.fd");
-    std::fs::copy(&ovmf_vars, &vars).expect("copy OVMF vars");
+        let disk = tmp.path().join(format!("disk-{fs}.img"));
+        let compile = AssertCommand::cargo_bin("umf")
+            .expect("umf binary")
+            .args(["compile", "local/boot:test", "-o", disk.to_str().unwrap()])
+            .args(["--fs", fs])
+            .args(["--layout-dir", layout_arg])
+            .output()
+            .expect("run umf compile");
+        assert!(
+            compile.status.success(),
+            "umf compile --fs {fs} failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compile.stdout),
+            String::from_utf8_lossy(&compile.stderr),
+        );
+        assert!(disk.is_file(), "compile --fs {fs} produced no disk image");
 
-    let qemu = Command::new("timeout")
-        .args(["-k", "5", boot_timeout, "qemu-system-x86_64"])
-        .args([
-            "-machine",
-            &format!("q35,accel={accel}"),
-            "-cpu",
-            cpu,
-            "-m",
-            "1024",
-        ])
-        .args([
-            "-drive",
-            &format!("file={},if=virtio,format=raw", disk.display()),
-        ])
-        .args([
-            "-drive",
-            &format!(
-                "if=pflash,unit=0,readonly=on,format=raw,file={}",
-                ovmf_code.display()
-            ),
-        ])
-        .args([
-            "-drive",
-            &format!("if=pflash,unit=1,format=raw,file={}", vars.display()),
-        ])
-        .args(["-display", "none", "-serial", "stdio", "-no-reboot"])
-        .output()
-        .expect("run qemu");
+        // --- boot under QEMU with split OVMF; capture the serial console ---
+        let vars = tmp.path().join(format!("OVMF_VARS-{fs}.fd"));
+        std::fs::copy(&ovmf_vars, &vars).expect("copy OVMF vars");
 
-    let serial = format!(
-        "{}{}",
-        String::from_utf8_lossy(&qemu.stdout),
-        String::from_utf8_lossy(&qemu.stderr)
-    );
-    assert!(
-        serial.contains(MARKER),
-        "boot did not reach userspace: marker {MARKER:?} not seen on serial.\n\
-         ---- QEMU serial log ----\n{serial}\n---- end serial log ----",
-    );
-    eprintln!("boot-smoke OK: observed userspace marker {MARKER:?} on the serial console");
+        let qemu = Command::new("timeout")
+            .args(["-k", "5", boot_timeout, "qemu-system-x86_64"])
+            .args([
+                "-machine",
+                &format!("q35,accel={accel}"),
+                "-cpu",
+                cpu,
+                "-m",
+                "1024",
+            ])
+            .args([
+                "-drive",
+                &format!("file={},if=virtio,format=raw", disk.display()),
+            ])
+            .args([
+                "-drive",
+                &format!(
+                    "if=pflash,unit=0,readonly=on,format=raw,file={}",
+                    ovmf_code.display()
+                ),
+            ])
+            .args([
+                "-drive",
+                &format!("if=pflash,unit=1,format=raw,file={}", vars.display()),
+            ])
+            .args(["-display", "none", "-serial", "stdio", "-no-reboot"])
+            .output()
+            .expect("run qemu");
+
+        let serial = format!(
+            "{}{}",
+            String::from_utf8_lossy(&qemu.stdout),
+            String::from_utf8_lossy(&qemu.stderr)
+        );
+        assert!(
+            serial.contains(MARKER),
+            "{fs} root did not reach userspace: marker {MARKER:?} not seen on serial.\n\
+             ---- QEMU serial log ----\n{serial}\n---- end serial log ----",
+        );
+        eprintln!("boot-smoke OK ({fs}): observed userspace marker {MARKER:?}");
+    }
+}
+
+/// The host tool needed to write `fs`, or `None` when UMF writes it in-process.
+fn mkfs_for(fs: &str) -> Option<&'static str> {
+    match fs {
+        "ext4" => Some("mkfs.ext4"),
+        "erofs" => Some("mkfs.erofs"),
+        _ => None,
+    }
+}
+
+/// Whether the caller demands every filesystem actually boot. Mirrors
+/// `UMF_REQUIRE_PRIVILEGED` in the privileged lane: without it, a runner
+/// missing `erofs-utils` would quietly prove only the default path.
+fn require_mkfs() -> bool {
+    std::env::var("UMF_REQUIRE_MKFS").is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
 }
