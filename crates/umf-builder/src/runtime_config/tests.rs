@@ -113,4 +113,11 @@ fn expose_with_appliance_entrypoint_fails_closed() {
         matches!(err, RuntimeConfigError::ExposeUnenforceable { .. }),
         "expected ExposeUnenforceable, got {err:?}"
     );
+    // Nothing half-written. This is the claim three documents got wrong for
+    // appliance images — they described a ruleset written but left unloaded,
+    // when in fact the build fails before writing anything at all.
+    assert!(
+        !staging.path().join("etc/nftables.conf").exists(),
+        "no ruleset may be written when the build is refused",
+    );
 }

@@ -32,9 +32,12 @@ Two ordering notes carry over from the single-stage path. `SHELL` / `USER` / `WO
 The spec describes [EXPOSE](specification.md#expose) as emitting an actual default-deny nftables ruleset, not just metadata. That enforcement applies only to **init-system bootable images** (`ENTRYPOINT systemd` / `openrc`), where the generated `nftables` service is enabled so the ruleset loads at boot. Two shapes do not get it:
 
 - **Container builds** record the exposed ports as ordinary OCI image-config metadata only (`exposed_ports`); no nftables ruleset is programmed, and the container runtime governs reachability.
-- **Appliance bootable images** (a binary-path `ENTRYPOINT`, no init system) write `/etc/nftables.conf` but have no init to enable the `nftables` service, so the ruleset is present but not auto-loaded.
+- **Appliance bootable images** (a binary-path `ENTRYPOINT`, no init system) are **rejected** when they carry `EXPOSE`, not shipped with an unloaded ruleset: *the ENTRYPOINT is a binary/appliance, so no init system loads the nftables ruleset at boot*. Nothing is written — the build fails before the ruleset is generated.
+- **A userland with no `nft` binary** is rejected the same way, even with an init-system `ENTRYPOINT`: the enabled `nftables` service cannot apply a ruleset it has no tool to load. UMF looks under `/usr/sbin`, `/sbin`, `/usr/bin` and `/bin`, so the userland must install an nftables package (`RUN apk add nftables`, or the distro equivalent) whenever the image uses `EXPOSE`.
 
-So treat EXPOSE's default-deny as a guarantee of init-system bootable images; for the other shapes, enforce reachability with your runtime or an explicit boot-time hook.
+Both are the same fail-closed rule: `EXPOSE` promises a default-deny firewall, so an image that would claim default-deny while having no firewall at all is refused at build time rather than published. The checks fire **only when the recipe contains `EXPOSE`** — an image without it is unaffected either way.
+
+So treat EXPOSE's default-deny as a guarantee of init-system bootable images whose userland ships `nft`; for a container build, reachability is the runtime's business.
 
 ### Bootable builds need `CAP_NET_ADMIN` for their `RUN` steps
 
