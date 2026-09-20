@@ -589,6 +589,37 @@ substantive changes including a behaviour change. Not fixable retroactively —
 a published tag is immutable — so `CONTRIBUTING.md` now carries a pre-tag check
 that lists notes added since the last tag.
 
+### The remaining CI-coverage leads
+
+All four confirmed; all four fix in workflow files, so they are recorded here
+rather than attempted.
+
+- **No lane runs a real `cloud-hypervisor` binary.** The only mention across
+  every workflow is a *comment* inside `rust.yml`'s subprocess-guardrail step.
+  So the CH backend — its REST control surface and the `VmNet` netns + tap +
+  nft DNAT port-forwarding — is exercised only against unit tests, never the
+  real VMM. Of the untested paths this is the largest: it is a whole second
+  backend.
+- **The root `Containerfile` and `scripts/install.sh` are never exercised.**
+  Both are user-facing distribution paths. `release.yml` names `install.sh`
+  only in comments about which tag becomes "Latest".
+- **`boot-smoke` pulls its fixture from Docker Hub** (`alpine:3.21`, via
+  `ALPINE_TAG`). That is the rate-limit exposure other lanes moved away from —
+  and this session hit a harder version of it: a network policy that blocked
+  Docker Hub's CDN outright made the fixture unbuildable, which is what stopped
+  the ext4 boot from being proved locally.
+- **The registry client is only tested against UMF's own in-process server,
+  which implements no auth.** Nothing in `crates/umf-oci/src/registry/` tests
+  touches `credsStore`, `credHelpers` or `~/.docker/config.json`, so the
+  documented precedence chain (flags → env → docker config → helpers) has never
+  been exercised against a real `401` challenge.
+
+One of these nearly went the other way. Grepping the workflows for
+`Containerfile` matches `rootless.yml` several times — but those are *recipe
+fixtures the lane writes*, named `Containerfile` because that is what
+`umf build` discovers, not the repository's own `Containerfile`. A keyword hit
+is not evidence about what a lane does.
+
 ---
 
 ## P3 — documentation truth
