@@ -564,6 +564,31 @@ helpers (`backends/qemu/spawn.rs`, `backends/cloud_hypervisor/spawn.rs`), which
 are permanent by design. The fix is one comment in a workflow file, which this
 session's OAuth token cannot push — it belongs with the other blocked CI work.
 
+**Confirmed — erofs, the default layer strategy, is never exercised in CI.**
+No lane installs `erofs-utils`, so `umf_oci::erofs::encoder_available()` is
+false everywhere, `want_erofs` never holds, and every lane silently takes the
+`Merge` fallback. No unit test drives `LayerStrategy::Erofs` either. The
+fallback is deliberate and correct — erofs is an acceleration, so any failure
+degrades to the merged unpack — but that is exactly what makes the gap
+invisible: the lanes are green *because* the code under test never ran.
+
+**Confirmed — the UKI unit tests always self-skip.** `boot-smoke.yml` installs
+`ukify` but runs only `cargo test --test boot_smoke`; `rust.yml` runs
+`cargo test --workspace`, which contains the UKI tests, but installs no
+`ukify`. So the lane with the tool does not run the tests and the lane with the
+tests has no tool. Same shape as the `mkfs` skip this session already fixed,
+and the repo already has the remedy pattern (`UMF_REQUIRE_PRIVILEGED`).
+
+Both fixes are apt packages in workflow files, which this session's token
+cannot push. They are folded into the blocked CI patch alongside the `mkfs`
+tooling so one `git am` closes all three.
+
+**Confirmed — `v0.0.1` was tagged with zero reno notes.** `git ls-tree -r
+v0.0.1 releasenotes/notes/` returns nothing, behind roughly fifteen
+substantive changes including a behaviour change. Not fixable retroactively —
+a published tag is immutable — so `CONTRIBUTING.md` now carries a pre-tag check
+that lists notes added since the last tag.
+
 ---
 
 ## P3 — documentation truth
