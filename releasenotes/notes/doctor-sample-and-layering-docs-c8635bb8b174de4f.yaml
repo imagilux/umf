@@ -1,0 +1,18 @@
+---
+other:
+  - |
+    The ``umf doctor`` sample output in ``docs/quickstart.md`` was obsolete in
+    form, not just in detail: it showed a flat ``name: value`` listing under a
+    *"Detected runtimes on this host"* heading, where the real report is two
+    aligned tables (**Container build & RUN**, **VM / bootable**) with
+    name / purpose / path / version / status columns. ``cli.md`` named a
+    section that no longer exists, and ``prerequisites.md`` /
+    ``troubleshooting.md`` quoted values in the old rendering. All corrected
+    against real output.
+  - |
+    ``docs/known-limitations.md`` records that a **bootable** build emits the
+    whole staging tree as one squashed layer, where the specification's L4+
+    rule promises one content-addressed layer per diff-producing directive with
+    input-hash reuse. Container builds do assemble a layer chain; this is
+    bootable-only. Images remain valid and bootable — what is lost is sharing
+    between images and any step-level cache reuse.

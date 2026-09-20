@@ -15,7 +15,7 @@ One dependency is needed to **build the `umf` binary itself**, and it is the onl
 |------|-----|------------------|--------|
 | **libseccomp** (library + headers) | The container engine links `libcontainer` with its `libseccomp` feature, so every `RUN` step runs under the default deny-by-default seccomp filter. The dev package is needed at compile time. | `sudo apt-get install -y libseccomp-dev` | `sudo dnf install -y libseccomp-devel` |
 
-Once built, **container builds and runs need nothing else external**: the build/run engine (youki's `libcontainer` + overlayfs) is linked into the binary. No `docker`, no `podman`, no daemon. `umf doctor` shows this as `container runtime: linked-in`.
+Once built, **container builds and runs need nothing else external**: the build/run engine (youki's `libcontainer` + overlayfs) is linked into the binary. No `docker`, no `podman`, no daemon. `umf doctor` shows this as a `container runtime` row reading `built-in`, status `ok`.
 
 The `seccomp:` line in `umf doctor` confirms the vendored default profile loaded. If it reads `UNAVAILABLE`, the binary's embedded profile is corrupt (rebuild from a clean checkout).
 

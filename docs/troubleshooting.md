@@ -8,8 +8,8 @@ A `RUN` step that fetches packages runs in its own network namespace, NAT'd out 
 
 Check, in order:
 
-1. **`nft` missing.** `umf doctor` prints `nft: <none on PATH>`. The masquerade rule can't be programmed without it. Install `nftables` (see [Prerequisites](prerequisites.md#container-run-step-network-egress)).
-2. **`FORWARD` policy is DROP.** A default-drop netfilter `FORWARD` chain silently blocks the NAT'd packets, and UMF cannot override a host firewall policy. `sudo umf doctor` reports `FORWARD policy: DROP`. Allow the container subnet (default `10.69.0.0/16`) or the `umfv*` veth interfaces in your firewall:
+1. **`nft` missing.** `umf doctor`'s `nft` row shows `<none on PATH>` with status `warn`. The masquerade rule can't be programmed without it. Install `nftables` (see [Prerequisites](prerequisites.md#container-run-step-network-egress)).
+2. **`FORWARD` policy is DROP.** A default-drop netfilter `FORWARD` chain silently blocks the NAT'd packets, and UMF cannot override a host firewall policy. `sudo umf doctor`'s `FORWARD policy` row reports `DROP`. Allow the container subnet (default `10.69.0.0/16`) or the `umfv*` veth interfaces in your firewall:
 
     ```bash
     sudo nft add rule inet filter forward ip saddr 10.69.0.0/16 accept

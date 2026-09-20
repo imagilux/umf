@@ -83,6 +83,25 @@ There is deliberately **no fallback**. A root the operator asked to be `ext4` mu
 - **Impact.** `umf compile` with no `--fs` still needs nothing installed — the default `squashfs` keeps the projector pure-Rust and usable on a bare air-gapped node. Only the opt-in paths carry the dependency.
 - **Both tools run unprivileged** and preserve ownership, modes and device nodes, so this adds no privilege requirement.
 
+### Bootable builds emit one squashed layer
+
+A container build assembles a layer chain — one content-addressed layer per
+directive that produces a filesystem diff, reused on a later build when the
+input hash matches. A **bootable** build does not: it emits the whole staging
+tree as a single layer (`LayerSource::from_directory_with(staging.path(), …)`,
+one entry passed to `emit_image`).
+
+- **Spec vs. impl.** The [build order](specification.md#build-order) says of
+  L4+: *"Each directive that produces a filesystem diff becomes one
+  content-addressed layer; subsequent builds reuse layers whose input hash …
+  matches a previously-emitted blob."* That holds for container builds and not
+  for bootable ones.
+- **Impact.** Correctness is unaffected — the image is valid OCI and boots —
+  but a bootable rebuild re-emits everything, so nothing is shared between two
+  images built from the same base, and no step-level cache reuse is possible.
+  The cost grows with the userland's size, which for a bootable image is the
+  whole OS.
+
 ### `--secret` on bootable builds
 
 `umf build --secret` is rejected when the build is bootable (`FROM` a kernel
