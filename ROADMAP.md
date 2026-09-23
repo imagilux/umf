@@ -620,6 +620,48 @@ fixtures the lane writes*, named `Containerfile` because that is what
 `umf build` discovers, not the repository's own `Containerfile`. A keyword hit
 is not evidence about what a lane does.
 
+### P2.2 — Close the remaining CI coverage gaps · [#31](https://github.com/imagilux/umf/issues/31) [#32](https://github.com/imagilux/umf/issues/32) [#33](https://github.com/imagilux/umf/issues/33) [#34](https://github.com/imagilux/umf/issues/34)
+
+The workflow changes for all four are written and validated but not yet on
+`main`: they need a push from an account with the `workflow` scope. Until they
+land, nothing executes on aarch64, two integration tests still assert nothing in
+any lane, and advisories are still only evaluated when someone happens to push.
+
+That last one is not theoretical. Two advisories have now landed on a green
+`main` between pushes — RUSTSEC-2026-0258 (h2) and RUSTSEC-2026-0285 (rustls) —
+each discovered by an unrelated PR rather than by a lane that was watching.
+
+### P2.3 — Test coverage where it is thinnest · [#39](https://github.com/imagilux/umf/issues/39)
+
+Coverage is inverted with respect to risk. `umf-engine` and `umf-networking` do
+the most privileged, least reversible work and carry the fewest tests per
+thousand lines (14 and 12, against 46 for `umf-parser`). That is also where the
+real bugs have actually been found.
+
+**Two security bugs found here, both failing open.** A sweep of these two crates
+produced unverified leads (most of its verification stage died on a session
+limit); two were checked by hand and both were real.
+
+- **`UMF_ROOTLESS_NET` failed open on a typo.** It resolved through
+  `EgressMode::from_env`, which maps an unparseable value to the default — and
+  the default is `native`, *full egress*. An operator hardening a build with
+  `UMF_ROOTLESS_NET=none` who typed `nonee` got the egress they were switching
+  off, silently, with `umf doctor` reporting `native … ok`. The
+  `--rootless-net` flag rejected the identical string, so one door failed
+  closed and the other open. Fixed by giving the environment form the flag's
+  parser.
+- **LSM confinement was dropped from every RUN step.**
+  `apply_run_spec_to_bundle` rebuilds `process` from `ProcessBuilder::default()`
+  and copies fields back one by one; it copied seven and missed
+  `apparmorProfile` and `selinuxLabel`, which `build_runtime_spec` sets
+  immediately before from `UMF_APPARMOR_PROFILE` / `UMF_SELINUX_LABEL`. Every
+  RUN step ran unconfined while the operator believed otherwise — and the loss
+  is unobservable on a host with no LSM loaded, which is most CI.
+
+Both have tests confirmed to fail when the fix is reverted. Neither was a crash
+or a wrong answer: both were a security control quietly not applying, which is
+the shape thin coverage is least able to catch.
+
 ---
 
 ## P3 — documentation truth
