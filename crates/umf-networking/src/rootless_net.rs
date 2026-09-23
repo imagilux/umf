@@ -54,10 +54,27 @@ impl EgressMode {
     /// [`EgressMode::Native`] when unset or unrecognised.
     #[must_use]
     pub fn from_env() -> Self {
-        std::env::var("UMF_ROOTLESS_NET")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default()
+        match std::env::var("UMF_ROOTLESS_NET") {
+            Err(_) => Self::default(),
+            Ok(raw) => match raw.parse() {
+                Ok(mode) => mode,
+                Err(e) => {
+                    // Do not fail open in silence. The default is `Native`
+                    // (full egress), so an operator typing `nonee` for `none`
+                    // would otherwise get exactly the egress they were trying
+                    // to switch off, with nothing said. The CLI rejects this
+                    // outright; this warn is for library consumers that never
+                    // pass through it.
+                    tracing::warn!(
+                        value = %raw,
+                        error = %e,
+                        "UMF_ROOTLESS_NET is not a recognised egress mode — \
+                         falling back to the default, which permits egress"
+                    );
+                    Self::default()
+                }
+            },
+        }
     }
 }
 

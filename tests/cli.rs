@@ -2006,3 +2006,45 @@ fn sbom_help_does_not_call_generate_future_work() {
         .stdout(contains("generate"))
         .stdout(predicates::str::contains("later, generate").not());
 }
+
+/// `UMF_ROOTLESS_NET` must be validated exactly like `--rootless-net`.
+///
+/// It previously reached `EgressMode::from_env`, which maps an unrecognised
+/// value to the default — and the default is `native`, i.e. full egress. So an
+/// operator hardening a build with `UMF_ROOTLESS_NET=none` who typed `nonee`
+/// got the egress they were trying to switch off, silently, with `umf doctor`
+/// reporting `native … ok` as though nothing were wrong. The flag rejected the
+/// identical value. A security control must not fail open on a typo.
+#[test]
+fn a_typo_in_the_rootless_net_env_var_is_rejected_not_defaulted() {
+    umf()
+        .env("UMF_ROOTLESS_NET", "nonee")
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stderr(contains("invalid UMF_ROOTLESS_NET"))
+        .stderr(contains("nonee"));
+}
+
+/// A valid value still selects that backend — the validation must not reject
+/// the setting it exists to honour.
+#[test]
+fn a_valid_rootless_net_env_var_still_selects_the_backend() {
+    umf()
+        .env("UMF_ROOTLESS_NET", "none")
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(contains("rootless egress backend"));
+}
+
+/// An explicit flag wins over a bad env value without erroring: the flag is the
+/// operator's override, so the env value is simply not consulted.
+#[test]
+fn the_rootless_net_flag_overrides_an_unparseable_env_var() {
+    umf()
+        .env("UMF_ROOTLESS_NET", "nonee")
+        .args(["--rootless-net", "none", "doctor"])
+        .assert()
+        .success();
+}

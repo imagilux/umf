@@ -80,6 +80,18 @@ pub(crate) fn apply_run_spec_to_bundle(
     if let Some(nn) = process.no_new_privileges() {
         process_builder = process_builder.no_new_privileges(nn);
     }
+    // LSM confinement, set by `build_runtime_spec` from `LsmConfig`. This
+    // rebuild starts from `ProcessBuilder::default()`, so a field not copied
+    // here is *dropped* — the step would run unconfined while the operator
+    // who set `UMF_APPARMOR_PROFILE` / `UMF_SELINUX_LABEL` believes otherwise.
+    // Invisible on a host with no LSM loaded, which is why it needs a test
+    // rather than a reviewer.
+    if let Some(profile) = process.apparmor_profile().clone() {
+        process_builder = process_builder.apparmor_profile(profile);
+    }
+    if let Some(label) = process.selinux_label().clone() {
+        process_builder = process_builder.selinux_label(label);
+    }
 
     let new_process = process_builder
         .build()

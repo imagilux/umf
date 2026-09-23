@@ -1,0 +1,23 @@
+---
+security:
+  - |
+    ``UMF_ROOTLESS_NET`` no longer fails open on an unrecognised value. It was
+    read through ``EgressMode::from_env``, which maps anything it cannot parse
+    to the default — and the default is ``native``, full egress. So an operator
+    hardening a build with ``UMF_ROOTLESS_NET=none`` who typed ``nonee`` got
+    exactly the egress they were switching off, with no warning, and
+    ``umf doctor`` reporting ``native … ok``. The ``--rootless-net`` flag
+    rejected the identical value. The CLI now validates the environment form
+    with the same parser, so both doors refuse the same input, and
+    ``EgressMode::from_env`` warns rather than defaulting in silence for
+    library consumers that do not pass through the CLI.
+  - |
+    LSM confinement is no longer dropped from the runtime spec.
+    ``apply_run_spec_to_bundle`` rebuilds the ``process`` block from a fresh
+    ``ProcessBuilder::default()`` and copies fields back individually; it
+    copied terminal, args, env, cwd, user, capabilities and
+    ``no_new_privileges``, but not ``apparmorProfile`` or ``selinuxLabel``.
+    Both are set by ``build_runtime_spec`` from ``UMF_APPARMOR_PROFILE`` /
+    ``UMF_SELINUX_LABEL``, so every ``RUN`` step and ``umf run`` executed
+    unconfined while the operator believed confinement was applied. The loss
+    is invisible on a host with no LSM loaded, which is most CI.
