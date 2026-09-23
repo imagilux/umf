@@ -1,0 +1,10 @@
+---
+other:
+  - |
+    ``UMF_BOOT_SMOKE=1`` now makes the boot-smoke test **fail** when a
+    prerequisite is missing — qemu, ``ukify``, OVMF firmware, or the kernel
+    fixture — instead of printing ``SKIP`` and passing. The variable is the
+    operator asking for a real-kernel boot, so a renamed package or a moved
+    firmware path used to downgrade the required CI check to "passes without
+    booting" at exactly the moment the environment changed. Leaving
+    ``UMF_BOOT_SMOKE`` unset still skips, deliberately.

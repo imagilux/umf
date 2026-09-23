@@ -60,8 +60,25 @@ fn have(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The one legitimate skip: `UMF_BOOT_SMOKE` is unset, so the operator has not
+/// asked for a boot. Everything after that gate uses [`missing_prerequisite`].
 fn skip(reason: &str) {
     eprintln!("SKIP boot_smoke: {reason}");
+}
+
+/// A prerequisite is missing *after* `UMF_BOOT_SMOKE=1` opted in.
+///
+/// That variable is the operator saying "I expect this to boot a real kernel",
+/// so a missing tool is a failure, not a skip. As a skip, a renamed apt package
+/// or a moved OVMF path quietly downgraded the required boot check from "boots a
+/// kernel" to "prints SKIP and passes" — losing the signal exactly when the
+/// environment changed. Same stance as `UMF_REQUIRE_MKFS` and
+/// `UMF_REQUIRE_PRIVILEGED`.
+fn missing_prerequisite(reason: &str) -> ! {
+    panic!(
+        "UMF_BOOT_SMOKE=1 but the boot-smoke cannot run: {reason}. \
+         Install it, or unset UMF_BOOT_SMOKE to skip deliberately."
+    )
 }
 
 /// The canonical ref the resolver/FROM-probe looks up (`Reference::whole()`,
@@ -76,16 +93,15 @@ fn canonical(reference: &str) -> String {
 
 /// Resolve the fixture dir: `UMF_BOOT_FIXTURE` if it points at a built fixture,
 /// otherwise build one into `tmp` via the script (needs docker).
-fn fixture_dir(tmp: &Path) -> Option<PathBuf> {
+fn fixture_dir(tmp: &Path) -> PathBuf {
     if let Ok(d) = std::env::var("UMF_BOOT_FIXTURE") {
         let p = PathBuf::from(d);
         if p.join("release").is_file() {
-            return Some(p);
+            return p;
         }
     }
     if !have("docker") {
-        skip("no prebuilt UMF_BOOT_FIXTURE and docker is absent");
-        return None;
+        missing_prerequisite("no prebuilt UMF_BOOT_FIXTURE and docker is absent");
     }
     let out = tmp.join("fixture");
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/make-boot-fixture.sh");
@@ -95,7 +111,7 @@ fn fixture_dir(tmp: &Path) -> Option<PathBuf> {
         .status()
         .expect("run make-boot-fixture.sh");
     assert!(status.success(), "make-boot-fixture.sh failed");
-    Some(out)
+    out
 }
 
 #[test]
@@ -106,13 +122,11 @@ fn boots_to_userspace_under_qemu() {
     }
     for (bin, why) in [("qemu-system-x86_64", "boot"), ("ukify", "the uki flavor")] {
         if !have(bin) {
-            skip(&format!("{bin} absent (needed for {why})"));
-            return;
+            missing_prerequisite(&format!("{bin} absent (needed for {why})"));
         }
     }
     let Some((ovmf_code, ovmf_vars)) = find_ovmf() else {
-        skip("no OVMF / UEFI firmware found");
-        return;
+        missing_prerequisite("no OVMF / UEFI firmware found");
     };
     // KVM when available (fast, ~90s); otherwise software emulation (TCG), which
     // still validates the boot but is much slower, so allow a generous timeout.
@@ -124,9 +138,7 @@ fn boots_to_userspace_under_qemu() {
     };
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let Some(fixture) = fixture_dir(tmp.path()) else {
-        return;
-    };
+    let fixture = fixture_dir(tmp.path());
     let release = std::fs::read_to_string(fixture.join("release"))
         .expect("read release")
         .trim()

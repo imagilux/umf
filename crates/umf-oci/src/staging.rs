@@ -131,6 +131,21 @@ impl BuildStaging {
     /// (they resolve inside the image at runtime, exactly as tar symlinks
     /// do), while the link's own placement is re-checked against the root.
     pub fn unpack_zip(&mut self, zip_path: &Path) -> Result<(), StagingError> {
+        self.unpack_zip_capped(zip_path, crate::materialize::max_uncompressed_layer_bytes())
+    }
+
+    /// [`Self::unpack_zip`] with an explicit cumulative decompression ceiling.
+    ///
+    /// Split out so the ceiling can be tested at a small value. The public entry
+    /// point reads it from `UMF_MAX_UNCOMPRESSED_LAYER_BYTES`, and a test cannot
+    /// set that: the workspace denies `unsafe_code`, and `std::env::set_var` is
+    /// `unsafe` in edition 2024 (it would also race every other test reading
+    /// the same process-global variable).
+    pub(crate) fn unpack_zip_capped(
+        &mut self,
+        zip_path: &Path,
+        cap: u64,
+    ) -> Result<(), StagingError> {
         use std::os::unix::fs::PermissionsExt as _;
 
         const S_IFMT: u32 = 0o170000;
@@ -141,7 +156,7 @@ impl BuildStaging {
 
         // One cumulative ceiling across the whole archive — the tar paths cap
         // their single decompressed stream the same way.
-        let mut remaining = crate::materialize::max_uncompressed_layer_bytes();
+        let mut remaining = cap;
         // Deferred symlinks: (name as stored, destination, link target).
         let mut symlinks: Vec<(String, PathBuf, PathBuf)> = Vec::new();
 
