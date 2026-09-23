@@ -1019,11 +1019,22 @@ pub fn run() -> ExitCode {
     // `--rootless-net` selects the rootless egress backend, overriding
     // `UMF_ROOTLESS_NET`. Resolved before dispatch so the engine sees it; a bad
     // value is a clear up-front error.
-    if let Some(spec) = cli.rootless_net.as_deref()
-        && let Err(msg) = umf_engine::rootless::set_egress_mode_from_arg(spec)
-    {
-        eprintln!("error: invalid --rootless-net: {msg}");
-        return ExitCode::FAILURE;
+    if let Some(spec) = cli.rootless_net.as_deref() {
+        if let Err(msg) = umf_engine::rootless::set_egress_mode_from_arg(spec) {
+            eprintln!("error: invalid --rootless-net: {msg}");
+            return ExitCode::FAILURE;
+        }
+    } else if let Ok(spec) = std::env::var("UMF_ROOTLESS_NET") {
+        // The env form is the same setting as the flag, so it gets the same
+        // validation. Without this it reached `EgressMode::from_env`, which
+        // maps an unrecognised value to the default — so `UMF_ROOTLESS_NET=nonee`
+        // silently granted full egress to an operator who was trying to turn
+        // egress off. A security control must not fail open on a typo, and the
+        // flag already refuses the identical value.
+        if let Err(msg) = umf_engine::rootless::set_egress_mode_from_arg(&spec) {
+            eprintln!("error: invalid UMF_ROOTLESS_NET: {msg}");
+            return ExitCode::FAILURE;
+        }
     }
 
     // `--rootless-net-allow` re-allows host-internal address categories for the
