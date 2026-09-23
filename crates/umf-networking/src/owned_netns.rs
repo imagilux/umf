@@ -169,3 +169,103 @@ fn create_netns_with_loopback() -> Result<OwnedFd, NetError> {
         .join()
         .map_err(|_| NetError::Runtime("owned-netns thread panicked".to_string()))?
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use super::*;
+    use std::os::unix::fs::MetadataExt as _;
+
+    /// Any valid fd will do for the refusal tests: `bind_mount_netns` opens the
+    /// pin path *before* it ever uses the fd, and it is the open that refuses.
+    fn some_fd() -> std::fs::File {
+        std::fs::File::open("/proc/self/ns/net").expect("open own netns")
+    }
+
+    /// A pre-existing file at the pin path is refused, and left intact.
+    ///
+    /// Without `create_new` the open would succeed on the existing file, the
+    /// bind-mount would then fail (or, as root, mount over it), and the
+    /// failure path's `remove_file(pin)` would delete a file UMF never created.
+    #[test]
+    fn a_pre_existing_file_at_the_pin_path_is_refused_and_left_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = dir.path().join("pin");
+        std::fs::write(&pin, b"not ours").unwrap();
+
+        let fd = some_fd();
+        let err = bind_mount_netns(fd.as_raw_fd(), &pin);
+        assert!(err.is_err(), "a pre-existing pin path must be refused");
+        assert_eq!(
+            std::fs::read(&pin).unwrap(),
+            b"not ours",
+            "the pre-existing file must be neither removed nor modified",
+        );
+    }
+
+    /// A dangling symlink at the pin path is refused, and its target is never
+    /// created.
+    ///
+    /// This is the attack the flags exist for. On the world-writable `/tmp`
+    /// fallback another user can predict the pin name and plant
+    /// `pin -> /somewhere/they/choose`; a plain `O_CREAT` would follow the link
+    /// and create the file there, with UMF's privileges.
+    #[test]
+    fn a_dangling_symlink_at_the_pin_path_is_refused_and_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        let pin = dir.path().join("pin");
+        std::os::unix::fs::symlink(&victim, &pin).unwrap();
+
+        let fd = some_fd();
+        assert!(
+            bind_mount_netns(fd.as_raw_fd(), &pin).is_err(),
+            "a symlinked pin path must be refused",
+        );
+        assert!(
+            !victim.exists(),
+            "the symlink was followed: its target was created at {}",
+            victim.display(),
+        );
+    }
+
+    fn privileged_required() -> bool {
+        std::env::var("UMF_REQUIRE_PRIVILEGED")
+            .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+    }
+
+    /// End to end, as root: `create` yields a namespace distinct from the
+    /// host's, pinned at a real path, and dropping the guard removes the pin.
+    ///
+    /// A pin that outlived its guard would leave a bind-mounted namespace
+    /// file behind for every rootless build, keeping the namespace alive.
+    #[test]
+    fn create_pins_a_distinct_namespace_and_drop_removes_the_pin() {
+        if !nix::unistd::Uid::current().is_root() {
+            assert!(
+                !privileged_required(),
+                "UMF_REQUIRE_PRIVILEGED=1 but the owned-netns test needs root",
+            );
+            eprintln!("skipping owned-netns create/drop test: needs root");
+            return;
+        }
+
+        let owned = OwnedNetns::create().expect("create owned netns");
+        let pin = owned.spec_path().to_path_buf();
+        assert!(pin.exists(), "the pin must exist while the guard is alive");
+
+        let ours = std::fs::metadata("/proc/self/ns/net").unwrap().ino();
+        let theirs = std::fs::metadata(format!("/proc/self/fd/{}", owned.raw_fd()))
+            .unwrap()
+            .ino();
+        assert_ne!(ours, theirs, "the owned namespace must not be the host's");
+
+        drop(owned);
+        assert!(
+            !pin.exists(),
+            "the pin outlived its guard: {}",
+            pin.display(),
+        );
+    }
+}

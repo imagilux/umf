@@ -266,3 +266,70 @@ fn into_path_persists_tree_until_caller_removes_it() {
     assert!(path.join("a").is_file());
     std::fs::remove_dir_all(&path).expect("manual cleanup");
 }
+
+// ── Cumulative decompression ceiling ──────────────────────────────────────────
+
+/// A zip of `n` entries, each `size` bytes of one repeated byte. That deflates
+/// to almost nothing and decompresses to `size` — the actual shape of a zip
+/// bomb, where the compressed file is small and the expansion is not.
+fn zip_of_entries(n: usize, size: usize) -> Vec<u8> {
+    build_zip(|w, opts| {
+        for i in 0..n {
+            w.start_file(format!("part{i}.bin"), opts).unwrap();
+            w.write_all(&vec![b'a'; size]).unwrap();
+        }
+    })
+}
+
+fn unpack_with_cap(zip_bytes: &[u8], cap: u64) -> Result<(), StagingError> {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let zip_path = write_zip_file(scratch.path(), zip_bytes);
+    let mut staging = BuildStaging::new().expect("new");
+    staging.unpack_zip_capped(&zip_path, cap)
+}
+
+fn is_the_ceiling(err: &StagingError) -> bool {
+    err.to_string().contains("uncompressed-size ceiling")
+}
+
+/// The ceiling is **cumulative** across the archive, not per entry.
+///
+/// Each entry gets a fresh `CappedReader` capped at whatever budget is left,
+/// and `remaining -= copied` is the only thing carrying that budget from one
+/// entry to the next. Were it lost, every entry would be granted the full
+/// ceiling again, and a bomb split into many entries — each individually
+/// harmless — would decompress without limit. Each entry here is well under
+/// the ceiling; only their sum exceeds it.
+#[test]
+fn the_zip_ceiling_is_cumulative_across_entries() {
+    let err = unpack_with_cap(&zip_of_entries(3, 400), 1000)
+        .expect_err("3 × 400 bytes must exceed a 1000-byte cumulative ceiling");
+    assert!(
+        is_the_ceiling(&err),
+        "must fail on the ceiling, not something else: {err}",
+    );
+}
+
+/// Control: the same shape under budget unpacks. Without this, the test above
+/// could be passing on an unrelated failure.
+#[test]
+fn a_zip_under_the_ceiling_unpacks() {
+    unpack_with_cap(&zip_of_entries(2, 400), 1000).expect("2 × 400 bytes fits in 1000");
+}
+
+/// The boundary: exactly at the ceiling is allowed, one byte over is not.
+#[test]
+fn the_zip_ceiling_is_inclusive_of_its_limit() {
+    unpack_with_cap(&zip_of_entries(2, 500), 1000).expect("exactly 1000 bytes is allowed");
+    let err = unpack_with_cap(&zip_of_entries(2, 500), 999)
+        .expect_err("1000 bytes must exceed a 999-byte ceiling");
+    assert!(is_the_ceiling(&err), "{err}");
+}
+
+/// A single entry larger than the ceiling is refused.
+#[test]
+fn a_single_zip_entry_over_the_ceiling_is_refused() {
+    let err = unpack_with_cap(&zip_of_entries(1, 1200), 1000)
+        .expect_err("a 1200-byte entry must exceed a 1000-byte ceiling");
+    assert!(is_the_ceiling(&err), "{err}");
+}

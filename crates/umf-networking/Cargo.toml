@@ -30,6 +30,8 @@ tracing = { workspace = true }
 # `user` (a workspace default) for `Uid::current().is_root()` — gates the
 # root-only native VM-net integration smoke.
 nix = { workspace = true }
+# Scratch directories for the netns pin-path refusal tests.
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

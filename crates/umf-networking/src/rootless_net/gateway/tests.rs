@@ -385,3 +385,100 @@ fn default_policy_refuses_a_host_internal_tcp_destination() {
         "the loopback server must never receive a connection through the gateway"
     );
 }
+
+/// The SSRF policy must refuse a UDP datagram to a host-internal destination,
+/// exactly as it refuses a TCP connection.
+///
+/// `forward_udp` checks the policy before binding a host socket, and its doc
+/// comment promises it refuses "a resolver the container points at a
+/// host-internal address" — the DNS case, where a container aims its resolver
+/// at loopback or the cloud-metadata IP. Only the TCP half had a deny test;
+/// UDP was tested solely on its allow path. Worse, a refusal is swallowed into
+/// `warn!("UDP forward failed")` in `service_udp`, so if the check regressed
+/// nothing would say so: the datagram would simply start arriving.
+#[test]
+fn default_policy_refuses_a_host_internal_udp_destination() {
+    // A real host UDP server on loopback — the destination the container must
+    // not reach. It reports whether anything ever arrived.
+    let server = UdpSocket::bind("127.0.0.1:0").expect("bind udp server");
+    let server_port = server.local_addr().unwrap().port();
+    server
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    let srv = thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        server.recv_from(&mut buf).is_ok()
+    });
+
+    let (gw_fd, client_fd) = socketpair();
+    let gw_dev = TapDevice::new(gw_fd, 1500).expect("gw device");
+    // SECURE DEFAULT: every host-internal category denied, loopback included.
+    let mut gw = Gateway::new(gw_dev, EgressPolicy::default()).expect("gateway");
+    let gw_ip = Ipv4Address::new(10, 71, 0, 1);
+    let dst_ip = Ipv4Address::new(127, 0, 0, 1); // denied: loopback
+    let client_ip = Ipv4Address::new(10, 71, 0, 2);
+
+    let anchor = StdInstant::now();
+    let smol_now =
+        || Instant::from_micros(anchor.elapsed().as_micros().min(i64::MAX as u128) as i64);
+    let (mut client_if, mut client_dev) = client_stack(client_fd, client_ip, gw_ip, smol_now());
+
+    let mut client_sockets = SocketSet::new(Vec::new());
+    let uh = {
+        let s = udp::Socket::new(
+            udp::PacketBuffer::new(vec![udp::PacketMetadata::EMPTY; 4], vec![0u8; 4096]),
+            udp::PacketBuffer::new(vec![udp::PacketMetadata::EMPTY; 4], vec![0u8; 4096]),
+        );
+        client_sockets.add(s)
+    };
+    client_sockets
+        .get_mut::<udp::Socket>(uh)
+        .bind(49153u16)
+        .expect("client udp bind");
+    let dst_ep = smoltcp::wire::IpEndpoint::new(IpAddress::Ipv4(dst_ip), server_port);
+
+    let deadline = StdInstant::now() + Duration::from_millis(1500);
+    let mut sent = false;
+    let mut got_reply = false;
+    while StdInstant::now() < deadline {
+        client_dev.fill_rx();
+        client_if.poll(smol_now(), &mut client_dev, &mut client_sockets);
+        gw.step();
+        client_dev.fill_rx();
+        client_if.poll(smol_now(), &mut client_dev, &mut client_sockets);
+
+        let c = client_sockets.get_mut::<udp::Socket>(uh);
+        if !sent && c.can_send() {
+            c.send_slice(b"query metadata", dst_ep)
+                .expect("client udp send");
+            sent = true;
+        }
+        if c.recv().is_ok() {
+            got_reply = true;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    let server_received = srv.join().expect("server thread");
+    let stats = gw.stats();
+
+    // Anti-vacuity: without these two, "nothing arrived" could just mean the
+    // datagram never reached the gateway at all.
+    assert!(sent, "precondition: the client must have sent the datagram");
+    assert!(
+        stats.learned_ports >= 1,
+        "precondition: the gateway must have seen the datagram (it learns the \
+         destination port before forwarding): {stats:?}",
+    );
+
+    // The refusal itself.
+    assert!(
+        !server_received,
+        "a datagram reached a host loopback service through the SSRF-policed gateway",
+    );
+    assert_eq!(
+        stats.udp_c2h, 0,
+        "a denied datagram must not be counted as forwarded: {stats:?}",
+    );
+    assert!(!got_reply, "no reply can exist for a refused datagram");
+}

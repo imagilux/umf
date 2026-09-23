@@ -662,6 +662,31 @@ Both have tests confirmed to fail when the fix is reverted. Neither was a crash
 or a wrong answer: both were a security control quietly not applying, which is
 the shape thin coverage is least able to catch.
 
+**Coverage added for the gaps #39 and the sweep named** — every new test
+confirmed to fail under a targeted sabotage of the code it covers, and in three
+cases confirmed *not* to fail under a sabotage the property survives:
+
+- **Secret resolution** (`resolve_secrets`): env-sourced secrets are written
+  owner-only and removed when the build ends; missing sources are errors naming
+  the id. #39's other two invariants — secret bytes out of the layer and out of
+  the cache key — turned out to be tested already, in `run.rs` and
+  `cache/tests.rs`. The explicit `0600` chmod is currently redundant (`tempfile`
+  already creates files `0600`), so the test pins the *property* rather than
+  that line: deleting it does not fail the test, loosening it to `0644` does.
+- **UDP SSRF deny**: a datagram to loopback through the policed gateway never
+  reaches a real loopback server. Removing the policy check makes it arrive.
+- **`owned_netns.rs`**, previously untested: a pre-existing file and a dangling
+  symlink at the pin path are both refused, and the guard removes its pin on
+  drop. `O_EXCL` and `O_NOFOLLOW` each independently block the symlink attack —
+  removing either alone leaves the test green, removing both fails it.
+- **The zip-bomb ceiling** is cumulative: three entries each under the cap but
+  over it together are refused. Dropping `remaining -= copied` — the one line
+  carrying the budget between entries — fails exactly the multi-entry cases and
+  nothing else.
+- **boot-smoke** now fails rather than skips when `UMF_BOOT_SMOKE=1` is set and
+  a prerequisite is missing. Reproduced first: with qemu hidden, the old code
+  printed `SKIP` and the required check *passed*.
+
 ---
 
 ## P3 — documentation truth
